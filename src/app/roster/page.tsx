@@ -1,50 +1,19 @@
 import Link from "next/link";
 import { prisma } from "@/lib/db";
-import { Shift, RosterStatus, RosterSource, type EmploymentType } from "@/generated/prisma/client";
-import {
-  addDaysToDateString,
-  dateOnlyFromString,
-  fmtTimeSydney,
-  fmtWorkDate,
-  toDateOnlyString,
-} from "@/lib/format";
+import { Shift, RosterStatus, RosterSource } from "@/generated/prisma/client";
+import { dateOnlyFromString, fmtTimeSydney, fmtWorkDate } from "@/lib/format";
+import { resolveWorkDate } from "@/lib/schedule";
+import { formatEmploymentType, ROSTER_STATUS_STYLES } from "@/lib/roster-display";
+import { DateNav } from "@/components/DateNav";
 
 export const dynamic = "force-dynamic";
 
 const SHIFT_ORDER: Shift[] = [Shift.AM, Shift.PM, Shift.NIGHT];
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-
-function todaySydneyDateString() {
-  return new Date().toLocaleDateString("en-CA", { timeZone: "Australia/Sydney" });
-}
-
-// Defaults to the most recent work date with a roster so the page never
-// opens empty in a system where "today" hasn't been generated yet.
-async function resolveDate(requested: string | undefined) {
-  if (requested && DATE_RE.test(requested)) return requested;
-
-  const latest = await prisma.dailyRoster.aggregate({ _max: { workDate: true } });
-  if (latest._max.workDate) return toDateOnlyString(latest._max.workDate);
-
-  return todaySydneyDateString();
-}
-
-function formatEmploymentType(type: EmploymentType, agencyName: string | null) {
-  const label = type.replace("_", " ").toLowerCase();
-  const capitalized = label.charAt(0).toUpperCase() + label.slice(1);
-  return agencyName ? `${capitalized} — ${agencyName}` : capitalized;
-}
-
-const STATUS_STYLES: Record<RosterStatus, string> = {
-  PLANNED: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200",
-  ABSENT: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200",
-  CANCELLED: "bg-zinc-200 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400",
-};
 
 export default async function RosterPage(props: PageProps<"/roster">) {
   const sp = await props.searchParams;
   const requested = typeof sp.date === "string" ? sp.date : undefined;
-  const dateStr = await resolveDate(requested);
+  const dateStr = await resolveWorkDate(requested);
   const workDate = dateOnlyFromString(dateStr);
 
   const rows = await prisma.dailyRoster.findMany({
@@ -66,9 +35,6 @@ export default async function RosterPage(props: PageProps<"/roster">) {
   const absentCount = rows.filter((r) => r.rosterStatus === RosterStatus.ABSENT).length;
   const manualCount = rows.filter((r) => r.rosterSource === RosterSource.MANUAL_CASUAL).length;
 
-  const prevDate = addDaysToDateString(dateStr, -1);
-  const nextDate = addDaysToDateString(dateStr, 1);
-
   return (
     <div className="min-h-screen bg-zinc-50 p-8 font-sans dark:bg-black dark:text-zinc-50">
       <div className="mx-auto max-w-5xl space-y-8">
@@ -82,32 +48,13 @@ export default async function RosterPage(props: PageProps<"/roster">) {
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
+            <DateNav basePath="/roster" dateStr={dateStr} />
             <Link
-              href={`/roster?date=${prevDate}`}
+              href={`/roster/build?date=${dateStr}`}
               className="rounded border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-900"
             >
-              ← Previous day
+              Build this roster →
             </Link>
-            <Link
-              href={`/roster?date=${nextDate}`}
-              className="rounded border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-900"
-            >
-              Next day →
-            </Link>
-            <form action="/roster" className="flex items-center gap-2">
-              <input
-                type="date"
-                name="date"
-                defaultValue={dateStr}
-                className="rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-950"
-              />
-              <button
-                type="submit"
-                className="rounded border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-900"
-              >
-                Go
-              </button>
-            </form>
           </div>
         </header>
 
@@ -176,7 +123,7 @@ export default async function RosterPage(props: PageProps<"/roster">) {
                           </td>
                           <td className="px-3 py-2">{row.defaultTask.name}</td>
                           <td className="px-3 py-2">
-                            <span className={`rounded px-2 py-0.5 text-xs font-medium ${STATUS_STYLES[row.rosterStatus]}`}>
+                            <span className={`rounded px-2 py-0.5 text-xs font-medium ${ROSTER_STATUS_STYLES[row.rosterStatus]}`}>
                               {row.rosterStatus}
                             </span>
                           </td>
