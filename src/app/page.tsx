@@ -1,17 +1,10 @@
+import Link from "next/link";
 import { prisma } from "@/lib/db";
+import { fmtTimeSydney } from "@/lib/format";
 
 // Temporary schema/seed verification page. Will be replaced by the live
 // task deployment board (phase 3 of the build order).
 export const dynamic = "force-dynamic";
-
-function fmtTime(d: Date) {
-  return d.toLocaleTimeString("en-AU", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-    timeZone: "Australia/Sydney",
-  });
-}
 
 export default async function Home() {
   const [
@@ -63,6 +56,12 @@ export default async function Home() {
             Data queried live from Postgres via Prisma. This page will be replaced by the live task
             deployment board.
           </p>
+          <Link
+            href="/roster"
+            className="mt-3 inline-block rounded border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-900"
+          >
+            View employee roster →
+          </Link>
         </header>
 
         <section className="grid grid-cols-2 gap-4 sm:grid-cols-4">
@@ -133,7 +132,7 @@ export default async function Home() {
                       <span>
                         {m.employee.firstName} {m.employee.lastName} ({m.employee.employeeCode})
                       </span>
-                      <span>started {fmtTime(m.startTime)}</span>
+                      <span>started {fmtTimeSydney(m.startTime)}</span>
                     </li>
                   ))}
                 </ul>
