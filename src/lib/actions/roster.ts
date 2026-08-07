@@ -7,18 +7,22 @@ import { standardRosterEligibilityWhere } from "@/lib/roster-queries";
 import {
   DATE_RE,
   dayOfWeekForDateString,
+  parseTimeString,
   plannedWindow,
   SHIFT_WINDOWS,
   hoursMinutesFromTimeValue,
 } from "@/lib/schedule";
-import { dateOnlyFromString } from "@/lib/format";
+import { dateOnlyFromString, toDateOnlyString } from "@/lib/format";
 import {
   MovementStatus,
+  Prisma,
   RosterSource,
   RosterStatus,
   Shift,
   TaskCategory,
 } from "@/generated/prisma/client";
+
+type TxClient = Prisma.TransactionClient;
 
 // ---------------------------------------------------------------------------
 // Generate from Standard Roster
@@ -90,7 +94,73 @@ export async function generateDailyRosterFromStandard(dateStr: string) {
 }
 
 // ---------------------------------------------------------------------------
-// Mark absent / undo
+// Shared helpers
+// ---------------------------------------------------------------------------
+
+// Closes whatever ACTIVE task movement (if any) exists for a roster row.
+// Shared by "mark absent" (which replaces it with a leave movement) and
+// "remove from roster" (which replaces it with nothing).
+async function closeActiveMovement(tx: TxClient, dailyRosterId: string) {
+  const activeMovement = await tx.taskMovement.findFirst({
+    where: { dailyRosterId, status: MovementStatus.ACTIVE },
+  });
+  if (!activeMovement) return;
+
+  const now = new Date();
+  await tx.taskMovement.update({
+    where: { id: activeMovement.id },
+    data: {
+      status: MovementStatus.CLOSED,
+      actualFinish: now,
+      durationMinutes: Math.round((now.getTime() - activeMovement.startTime.getTime()) / 60000),
+    },
+  });
+}
+
+// Shared by the single-row and bulk "mark absent" actions. Caller has
+// already validated dailyRoster.rosterStatus === PLANNED and leaveTask is a
+// real active LEAVE-category task.
+async function markAbsentCore(
+  tx: TxClient,
+  dailyRoster: { id: string; employeeId: string; plannedStart: Date; approvedFinish: Date },
+  leaveTask: { id: string; name: string },
+  actingUserId: string
+) {
+  await closeActiveMovement(tx, dailyRoster.id);
+
+  await tx.taskMovement.create({
+    data: {
+      employeeId: dailyRoster.employeeId,
+      dailyRosterId: dailyRoster.id,
+      taskId: leaveTask.id,
+      startTime: dailyRoster.plannedStart,
+      scheduledFinish: dailyRoster.approvedFinish,
+      status: MovementStatus.ACTIVE,
+      processedByUserId: actingUserId,
+    },
+  });
+
+  await tx.dailyRoster.update({
+    where: { id: dailyRoster.id },
+    data: {
+      rosterStatus: RosterStatus.ABSENT,
+      overrideReason: `Marked absent: ${leaveTask.name}`,
+    },
+  });
+
+  await tx.auditLog.create({
+    data: {
+      entityType: "DailyRoster",
+      entityId: dailyRoster.id,
+      action: "MARK_ABSENT",
+      changes: { leaveTask: leaveTask.name },
+      changedByUserId: actingUserId,
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Mark absent (single row) / bulk / undo
 // ---------------------------------------------------------------------------
 
 export async function markAbsentAction(formData: FormData) {
@@ -111,53 +181,34 @@ export async function markAbsentAction(formData: FormData) {
   });
   if (!leaveTask) throw new Error("Invalid leave type");
 
-  const activeMovement = await prisma.taskMovement.findFirst({
-    where: { dailyRosterId, status: MovementStatus.ACTIVE },
+  await prisma.$transaction((tx) => markAbsentCore(tx, dailyRoster, leaveTask, actingUser.id));
+
+  refresh();
+}
+
+// Same leave type applied to every selected row. Rows that are no longer
+// PLANNED by the time this runs (stale UI, double-submit) are silently
+// skipped rather than failing the whole batch.
+export async function bulkMarkAbsentAction(formData: FormData) {
+  const dailyRosterIds = formData.getAll("dailyRosterId").map(String).filter(Boolean);
+  const leaveTaskId = String(formData.get("leaveTaskId") ?? "");
+  if (dailyRosterIds.length === 0) throw new Error("No rows selected");
+  if (!leaveTaskId) throw new Error("Missing leaveTaskId");
+
+  const actingUser = await requireCurrentUser();
+
+  const leaveTask = await prisma.task.findFirst({
+    where: { id: leaveTaskId, category: TaskCategory.LEAVE, isActive: true },
   });
-  const now = new Date();
+  if (!leaveTask) throw new Error("Invalid leave type");
 
-  await prisma.$transaction(async (tx) => {
-    if (activeMovement) {
-      await tx.taskMovement.update({
-        where: { id: activeMovement.id },
-        data: {
-          status: MovementStatus.CLOSED,
-          actualFinish: now,
-          durationMinutes: Math.round((now.getTime() - activeMovement.startTime.getTime()) / 60000),
-        },
-      });
-    }
-
-    await tx.taskMovement.create({
-      data: {
-        employeeId: dailyRoster.employeeId,
-        dailyRosterId: dailyRoster.id,
-        taskId: leaveTask.id,
-        startTime: dailyRoster.plannedStart,
-        scheduledFinish: dailyRoster.approvedFinish,
-        status: MovementStatus.ACTIVE,
-        processedByUserId: actingUser.id,
-      },
-    });
-
-    await tx.dailyRoster.update({
-      where: { id: dailyRoster.id },
-      data: {
-        rosterStatus: RosterStatus.ABSENT,
-        overrideReason: `Marked absent: ${leaveTask.name}`,
-      },
-    });
-
-    await tx.auditLog.create({
-      data: {
-        entityType: "DailyRoster",
-        entityId: dailyRoster.id,
-        action: "MARK_ABSENT",
-        changes: { leaveTask: leaveTask.name },
-        changedByUserId: actingUser.id,
-      },
-    });
+  const dailyRosters = await prisma.dailyRoster.findMany({
+    where: { id: { in: dailyRosterIds }, rosterStatus: RosterStatus.PLANNED },
   });
+
+  for (const dailyRoster of dailyRosters) {
+    await prisma.$transaction((tx) => markAbsentCore(tx, dailyRoster, leaveTask, actingUser.id));
+  }
 
   refresh();
 }
@@ -201,6 +252,149 @@ export async function undoAbsentAction(formData: FormData) {
         entityType: "DailyRoster",
         entityId: dailyRoster.id,
         action: "UNDO_ABSENT",
+        changedByUserId: actingUser.id,
+      },
+    });
+  });
+
+  refresh();
+}
+
+// ---------------------------------------------------------------------------
+// Remove from roster entirely
+// ---------------------------------------------------------------------------
+
+export async function removeFromRosterAction(formData: FormData) {
+  const dailyRosterId = String(formData.get("dailyRosterId") ?? "");
+  if (!dailyRosterId) throw new Error("Missing dailyRosterId");
+
+  const actingUser = await requireCurrentUser();
+
+  const dailyRoster = await prisma.dailyRoster.findUnique({ where: { id: dailyRosterId } });
+  if (!dailyRoster) throw new Error("Roster row not found");
+  if (dailyRoster.rosterStatus === RosterStatus.CANCELLED) {
+    throw new Error("Already removed from roster");
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await closeActiveMovement(tx, dailyRoster.id);
+
+    await tx.dailyRoster.update({
+      where: { id: dailyRoster.id },
+      data: { rosterStatus: RosterStatus.CANCELLED, overrideReason: "Removed from roster" },
+    });
+
+    await tx.auditLog.create({
+      data: {
+        entityType: "DailyRoster",
+        entityId: dailyRoster.id,
+        action: "REMOVE_FROM_ROSTER",
+        changedByUserId: actingUser.id,
+      },
+    });
+  });
+
+  refresh();
+}
+
+// ---------------------------------------------------------------------------
+// Inline field edits — task and times are edited independently (click the
+// field, save on blur/Enter), so each is its own action rather than one
+// combined form. Both are called directly from client components, not via
+// <form action>, so they take plain arguments rather than FormData.
+// ---------------------------------------------------------------------------
+
+export async function updateRosterTaskAction(dailyRosterId: string, taskId: string) {
+  const actingUser = await requireCurrentUser();
+
+  const dailyRoster = await prisma.dailyRoster.findUnique({ where: { id: dailyRosterId } });
+  if (!dailyRoster) throw new Error("Roster row not found");
+  if (dailyRoster.rosterStatus !== RosterStatus.PLANNED) {
+    throw new Error(`Cannot edit from status ${dailyRoster.rosterStatus}`);
+  }
+  if (taskId === dailyRoster.defaultTaskId) return;
+
+  const task = await prisma.task.findFirst({
+    where: { id: taskId, isActive: true, category: { not: TaskCategory.LEAVE } },
+  });
+  if (!task) throw new Error("Invalid task");
+
+  await prisma.$transaction(async (tx) => {
+    await tx.dailyRoster.update({ where: { id: dailyRoster.id }, data: { defaultTaskId: task.id } });
+    await tx.auditLog.create({
+      data: {
+        entityType: "DailyRoster",
+        entityId: dailyRoster.id,
+        action: "EDIT_ROSTER_TASK",
+        changes: { task: task.name },
+        changedByUserId: actingUser.id,
+      },
+    });
+  });
+
+  refresh();
+}
+
+// A reason is required only when the new start or finish deviates from the
+// employee's Standard Roster pattern for this row by more than 15 minutes —
+// small adjustments don't need explaining, late-starts/early-finishes/
+// overtime-type changes do. Rows with no Standard Roster (casual/manual
+// additions) have nothing to deviate from, so never require one. The client
+// shows/hides the reason field as a UX nicety; this check is the real gate.
+export async function updateRosterTimesAction(
+  dailyRosterId: string,
+  startTimeStr: string,
+  finishTimeStr: string,
+  overrideReason?: string
+) {
+  const actingUser = await requireCurrentUser();
+
+  const dailyRoster = await prisma.dailyRoster.findUnique({ where: { id: dailyRosterId } });
+  if (!dailyRoster) throw new Error("Roster row not found");
+  if (dailyRoster.rosterStatus !== RosterStatus.PLANNED) {
+    throw new Error(`Cannot edit from status ${dailyRoster.rosterStatus}`);
+  }
+
+  const start = parseTimeString(startTimeStr);
+  const finish = parseTimeString(finishTimeStr);
+
+  let standardWindow: { startMinutes: number; finishMinutes: number } | null = null;
+  if (dailyRoster.standardRosterId) {
+    const sr = await prisma.standardRoster.findUnique({ where: { id: dailyRoster.standardRosterId } });
+    if (sr) {
+      const s = hoursMinutesFromTimeValue(sr.startTime);
+      const f = hoursMinutesFromTimeValue(sr.finishTime);
+      standardWindow = { startMinutes: s.hours * 60 + s.minutes, finishMinutes: f.hours * 60 + f.minutes };
+    }
+  }
+
+  const newStartMinutes = start[0] * 60 + start[1];
+  const newFinishMinutes = finish[0] * 60 + finish[1];
+  const deviates =
+    standardWindow !== null &&
+    (Math.abs(newStartMinutes - standardWindow.startMinutes) > 15 ||
+      Math.abs(newFinishMinutes - standardWindow.finishMinutes) > 15);
+
+  const reason = overrideReason?.trim() || null;
+  if (deviates && !reason) {
+    throw new Error("A reason is required when the change is more than 15 minutes from the standard roster time.");
+  }
+
+  const dateStr = toDateOnlyString(dailyRoster.workDate);
+  const { plannedStart, plannedFinish } = plannedWindow(dateStr, start, finish);
+
+  await prisma.$transaction(async (tx) => {
+    await tx.dailyRoster.update({
+      where: { id: dailyRoster.id },
+      data: { plannedStart, plannedFinish, approvedFinish: plannedFinish, overrideReason: reason },
+    });
+
+    await tx.auditLog.create({
+      data: {
+        entityType: "DailyRoster",
+        entityId: dailyRoster.id,
+        action: "EDIT_ROSTER_TIMES",
+        changes: { startTime: startTimeStr, finishTime: finishTimeStr, reason },
         changedByUserId: actingUser.id,
       },
     });

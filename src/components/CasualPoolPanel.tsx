@@ -19,10 +19,45 @@ export type TaskOption = { id: string; name: string; category: TaskCategory };
 
 const SHIFT_OPTIONS: Shift[] = [Shift.AM, Shift.PM, Shift.NIGHT];
 
+type SortKey = "name" | "type" | "department";
+const SORTERS: Record<SortKey, (a: PoolEmployee, b: PoolEmployee) => number> = {
+  name: (a, b) => `${a.lastName} ${a.firstName}`.localeCompare(`${b.lastName} ${b.firstName}`),
+  type: (a, b) => a.employmentType.localeCompare(b.employmentType),
+  department: (a, b) => (a.departmentName ?? "").localeCompare(b.departmentName ?? ""),
+};
+
 function employmentTypeLabel(type: EmploymentType, agencyName: string | null) {
   const label = type.replace("_", " ").toLowerCase();
   const capitalized = label.charAt(0).toUpperCase() + label.slice(1);
   return agencyName ? `${capitalized} — ${agencyName}` : capitalized;
+}
+
+function SortableHeader({
+  label,
+  sortKey,
+  active,
+  dir,
+  onSort,
+}: {
+  label: string;
+  sortKey: SortKey;
+  active: SortKey;
+  dir: "asc" | "desc";
+  onSort: (key: SortKey) => void;
+}) {
+  const isActive = active === sortKey;
+  return (
+    <th className="px-3 py-2">
+      <button
+        type="button"
+        onClick={() => onSort(sortKey)}
+        className="inline-flex items-center gap-1 hover:underline"
+      >
+        {label}
+        {isActive && <span aria-hidden>{dir === "asc" ? "▲" : "▼"}</span>}
+      </button>
+    </th>
+  );
 }
 
 export function CasualPoolPanel({
@@ -30,19 +65,23 @@ export function CasualPoolPanel({
   employees,
   tasks,
   disabled,
+  defaultShiftFilter,
 }: {
   dateStr: string;
   employees: PoolEmployee[];
   tasks: TaskOption[];
   disabled: boolean;
+  defaultShiftFilter?: Shift;
 }) {
   const [search, setSearch] = useState("");
-  const [shiftFilter, setShiftFilter] = useState<Shift | "ALL">("ALL");
+  const [shiftFilter, setShiftFilter] = useState<Shift | "ALL">(defaultShiftFilter ?? "ALL");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [rowShift, setRowShift] = useState<Record<string, Shift>>({});
   const [taskId, setTaskId] = useState(tasks[0]?.id ?? "");
   const [message, setMessage] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
+  const [sortKey, setSortKey] = useState<SortKey>("name");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -53,6 +92,21 @@ export function CasualPoolPanel({
       return haystack.includes(q);
     });
   }, [employees, search, shiftFilter]);
+
+  const sorted = useMemo(() => {
+    const list = [...filtered].sort(SORTERS[sortKey]);
+    if (sortDir === "desc") list.reverse();
+    return list;
+  }, [filtered, sortKey, sortDir]);
+
+  function toggleSort(key: SortKey) {
+    if (sortKey === key) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      setSortDir("asc");
+    }
+  }
 
   function shiftFor(employee: PoolEmployee) {
     return rowShift[employee.id] ?? employee.defaultShift ?? Shift.AM;
@@ -143,21 +197,27 @@ export function CasualPoolPanel({
           <thead className="sticky top-0 bg-zinc-100 text-xs uppercase text-zinc-500 dark:bg-zinc-900">
             <tr>
               <th className="w-8 px-3 py-2" />
-              <th className="px-3 py-2">Employee</th>
-              <th className="px-3 py-2">Type</th>
-              <th className="px-3 py-2">Department</th>
+              <SortableHeader label="Employee" sortKey="name" active={sortKey} dir={sortDir} onSort={toggleSort} />
+              <SortableHeader label="Type" sortKey="type" active={sortKey} dir={sortDir} onSort={toggleSort} />
+              <SortableHeader
+                label="Department"
+                sortKey="department"
+                active={sortKey}
+                dir={sortDir}
+                onSort={toggleSort}
+              />
               <th className="px-3 py-2">Shift</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
-            {filtered.length === 0 ? (
+            {sorted.length === 0 ? (
               <tr>
                 <td colSpan={5} className="px-3 py-6 text-center text-sm text-zinc-500">
                   No matching employees.
                 </td>
               </tr>
             ) : (
-              filtered.map((e) => (
+              sorted.map((e) => (
                 <tr key={e.id} className="bg-white dark:bg-zinc-950">
                   <td className="px-3 py-2">
                     <input

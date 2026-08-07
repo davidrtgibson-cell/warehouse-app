@@ -52,6 +52,13 @@ export function hoursMinutesFromTimeValue(t: Date): { hours: number; minutes: nu
   return { hours: t.getUTCHours(), minutes: t.getUTCMinutes() };
 }
 
+export type ShiftFilter = Shift | "ALL";
+
+export function parseShiftFilter(value: string | undefined): ShiftFilter {
+  if (value === Shift.AM || value === Shift.PM || value === Shift.NIGHT) return value;
+  return "ALL";
+}
+
 // Default shift windows, used when a casual/agency employee has no Standard
 // Roster row of their own to source times from.
 export const SHIFT_WINDOWS: Record<Shift, { start: [number, number]; finish: [number, number] }> = {
@@ -65,6 +72,17 @@ function finishDateString(dateStr: string, start: [number, number], finish: [num
   const startMinutes = start[0] * 60 + start[1];
   const finishMinutes = finish[0] * 60 + finish[1];
   return finishMinutes <= startMinutes ? addDaysToDateString(dateStr, 1) : dateStr;
+}
+
+// Parses a native <input type="time"> value ("HH:MM") into an hour/minute
+// tuple, validating range.
+export function parseTimeString(value: string): [number, number] {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(value);
+  if (!match) throw new Error(`Invalid time: ${value}`);
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (hours > 23 || minutes > 59) throw new Error(`Invalid time: ${value}`);
+  return [hours, minutes];
 }
 
 // Builds a planned start/finish instant pair from a shift's hour/minute
