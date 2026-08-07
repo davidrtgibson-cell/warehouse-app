@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { prisma } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
-import { Shift, RosterStatus, RosterSource, TaskCategory } from "@/generated/prisma/client";
+import { Shift, MovementStatus, RosterStatus, RosterSource, TaskCategory } from "@/generated/prisma/client";
 import { dateOnlyFromString, fmtTimeSydney, fmtWorkDate } from "@/lib/format";
 import {
   dayOfWeekForDateString,
@@ -22,6 +22,7 @@ import { InlineTaskCell } from "@/components/InlineTaskCell";
 import { InlineTimesCell } from "@/components/InlineTimesCell";
 import {
   generateDailyRosterFromStandard,
+  finalizeRosterAction,
   markAbsentAction,
   bulkMarkAbsentAction,
   undoAbsentAction,
@@ -108,6 +109,29 @@ export default async function BuildRosterPage(props: PageProps<"/roster/build">)
   const generatedFromStandardCount = rows.filter((r) => r.rosterSource === RosterSource.STANDARD_ROSTER).length;
   const pendingGenerateCount = Math.max(0, eligibleStandardRosterCount - generatedFromStandardCount);
 
+  // Finalisation is per specific shift, not "ALL" — nothing to show/do here
+  // until one is picked.
+  const finalizeShift = shiftFilter === "ALL" ? null : shiftFilter;
+  const rowsForFinalizeShift = finalizeShift
+    ? rows.filter((r) => r.shift === finalizeShift && r.rosterStatus === RosterStatus.PLANNED)
+    : [];
+  const [finalization, activeMovementsForShift] = await Promise.all([
+    finalizeShift
+      ? prisma.rosterFinalization.findUnique({
+          where: { workDate_shift: { workDate, shift: finalizeShift } },
+          include: { finalizedByUser: true },
+        })
+      : Promise.resolve(null),
+    rowsForFinalizeShift.length
+      ? prisma.taskMovement.findMany({
+          where: { dailyRosterId: { in: rowsForFinalizeShift.map((r) => r.id) }, status: MovementStatus.ACTIVE },
+          select: { dailyRosterId: true },
+        })
+      : Promise.resolve([]),
+  ]);
+  const alreadyLiveIds = new Set(activeMovementsForShift.map((m) => m.dailyRosterId));
+  const pendingFinalizeCount = rowsForFinalizeShift.filter((r) => !alreadyLiveIds.has(r.id)).length;
+
   const SORTERS: Record<SortKey, (a: Row, b: Row) => number> = {
     // Sorts on the same "First Last" order the Employee column displays —
     // sorting by last name here (while showing first name first) made the
@@ -170,7 +194,11 @@ export default async function BuildRosterPage(props: PageProps<"/roster/build">)
     await generateDailyRosterFromStandard(dateStr);
   }
 
-  const printHref = `/roster/print?date=${dateStr}${shiftFilter === "ALL" ? "" : `&shift=${shiftFilter}`}`;
+  async function finalizeAction() {
+    "use server";
+    if (!finalizeShift) return;
+    await finalizeRosterAction(dateStr, finalizeShift);
+  }
 
   function sortHref(key: SortKey) {
     const nextDir = sortKey === key && sortDir === "asc" ? "desc" : "asc";
@@ -202,17 +230,9 @@ export default async function BuildRosterPage(props: PageProps<"/roster/build">)
             <h1 className="text-2xl font-semibold">Build daily roster</h1>
             <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">{fmtWorkDate(workDate)}</p>
           </div>
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex flex-wrap items-center gap-3">
-              <DateNav basePath="/roster/build" dateStr={dateStr} />
-              <ShiftFilterNav basePath="/roster/build" dateStr={dateStr} value={shiftFilter} />
-            </div>
-            <Link
-              href={printHref}
-              className="rounded border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-900"
-            >
-              Print sheet →
-            </Link>
+          <div className="flex flex-wrap items-center gap-3">
+            <DateNav basePath="/roster/build" dateStr={dateStr} />
+            <ShiftFilterNav basePath="/roster/build" dateStr={dateStr} value={shiftFilter} />
           </div>
         </header>
 
@@ -253,6 +273,55 @@ export default async function BuildRosterPage(props: PageProps<"/roster/build">)
             </form>
           </div>
         </section>
+
+        {finalizeShift ? (
+          <section className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-semibold">Finalise roster — {finalizeShift} shift</h2>
+                {finalization ? (
+                  <p className="mt-1 text-xs text-zinc-500">
+                    Finalised {fmtTimeSydney(finalization.finalizedAt)} by {finalization.finalizedByUser.name}.
+                    {pendingFinalizeCount > 0 &&
+                      ` ${pendingFinalizeCount} added since — re-finalise to bring them live.`}
+                  </p>
+                ) : (
+                  <p className="mt-1 text-xs text-zinc-500">
+                    Bulk-opens a task movement for everyone on this shift, starting at their planned time —
+                    brings it onto the Live Board. The roster stays editable after.
+                  </p>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                {finalization && (
+                  <Link
+                    href={`/roster/print?date=${dateStr}&shift=${finalizeShift}`}
+                    className="rounded border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-900"
+                  >
+                    Print sheet →
+                  </Link>
+                )}
+                <form action={finalizeAction}>
+                  <button
+                    type="submit"
+                    disabled={!currentUser || pendingFinalizeCount === 0}
+                    className="rounded border border-zinc-300 px-3 py-1.5 text-sm font-medium hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-900"
+                  >
+                    {finalization
+                      ? pendingFinalizeCount > 0
+                        ? `Re-finalise (${pendingFinalizeCount} new)`
+                        : "Finalised ✓"
+                      : `Finalise Roster (${pendingFinalizeCount})`}
+                  </button>
+                </form>
+              </div>
+            </div>
+          </section>
+        ) : (
+          <div className="rounded-lg border border-dashed border-zinc-300 p-4 text-center text-sm text-zinc-500 dark:border-zinc-700">
+            Select a specific shift above to finalise it and open the printable sheet.
+          </div>
+        )}
 
         <section className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
           <h2 className="mb-2 text-sm font-semibold text-zinc-500">

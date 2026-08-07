@@ -13,6 +13,7 @@ import {
   hoursMinutesFromTimeValue,
 } from "@/lib/schedule";
 import { dateOnlyFromString, toDateOnlyString } from "@/lib/format";
+import { closeActiveMovement, openMovement } from "@/lib/movement-core";
 import {
   MovementStatus,
   Prisma,
@@ -94,28 +95,55 @@ export async function generateDailyRosterFromStandard(dateStr: string) {
 }
 
 // ---------------------------------------------------------------------------
-// Shared helpers
+// Finalise roster — bulk-opens an ACTIVE movement (on the default task,
+// starting at plannedStart) for every PLANNED row on a date/shift that
+// doesn't have one yet, and marks the date/shift as live for the board.
+// Not a lock: safe to call again later (e.g. after adding casual staff) —
+// rows that already have an active movement are left alone.
 // ---------------------------------------------------------------------------
 
-// Closes whatever ACTIVE task movement (if any) exists for a roster row.
-// Shared by "mark absent" (which replaces it with a leave movement) and
-// "remove from roster" (which replaces it with nothing).
-async function closeActiveMovement(tx: TxClient, dailyRosterId: string) {
-  const activeMovement = await tx.taskMovement.findFirst({
-    where: { dailyRosterId, status: MovementStatus.ACTIVE },
-  });
-  if (!activeMovement) return;
+export async function finalizeRosterAction(dateStr: string, shift: Shift) {
+  if (!DATE_RE.test(dateStr)) throw new Error("Invalid date");
+  const actingUser = await requireCurrentUser();
+  const workDate = dateOnlyFromString(dateStr);
 
-  const now = new Date();
-  await tx.taskMovement.update({
-    where: { id: activeMovement.id },
-    data: {
-      status: MovementStatus.CLOSED,
-      actualFinish: now,
-      durationMinutes: Math.round((now.getTime() - activeMovement.startTime.getTime()) / 60000),
-    },
+  const rows = await prisma.dailyRoster.findMany({
+    where: { workDate, shift, rosterStatus: RosterStatus.PLANNED },
   });
+
+  const alreadyActive = await prisma.taskMovement.findMany({
+    where: { dailyRosterId: { in: rows.map((r) => r.id) }, status: MovementStatus.ACTIVE },
+    select: { dailyRosterId: true },
+  });
+  const activeIds = new Set(alreadyActive.map((m) => m.dailyRosterId));
+  const toStart = rows.filter((r) => !activeIds.has(r.id));
+
+  const tasks = await prisma.task.findMany({
+    where: { id: { in: Array.from(new Set(toStart.map((r) => r.defaultTaskId))) } },
+  });
+  const taskById = new Map(tasks.map((t) => [t.id, t]));
+
+  await prisma.$transaction(async (tx) => {
+    for (const row of toStart) {
+      const task = taskById.get(row.defaultTaskId);
+      if (!task) continue;
+      await openMovement(tx, row, task, actingUser.id, "FINALIZE_ROSTER", row.plannedStart);
+    }
+
+    await tx.rosterFinalization.upsert({
+      where: { workDate_shift: { workDate, shift } },
+      create: { workDate, shift, finalizedByUserId: actingUser.id },
+      update: { finalizedAt: new Date(), finalizedByUserId: actingUser.id },
+    });
+  });
+
+  refresh();
+  return { started: toStart.length };
 }
+
+// ---------------------------------------------------------------------------
+// Shared helpers
+// ---------------------------------------------------------------------------
 
 // Shared by the single-row and bulk "mark absent" actions. Caller has
 // already validated dailyRoster.rosterStatus === PLANNED and leaveTask is a
@@ -233,9 +261,10 @@ export async function undoAbsentAction(formData: FormData) {
   const otherMovements = movements.filter((m) => m.task.category !== TaskCategory.LEAVE);
 
   if (otherMovements.length > 0) {
-    // Only reachable once the live task board can open movements of its own
-    // (doesn't exist yet). Refusing rather than guessing which movement, if
-    // any, should be reopened.
+    // Reachable once the live task board has opened a real work movement for
+    // this row (see lib/actions/board.ts) and it's then marked absent.
+    // Deciding whether/which movement to reopen is genuinely ambiguous —
+    // refusing rather than guessing.
     throw new Error("Cannot auto-undo: this roster row has other task movements. Resolve manually.");
   }
 
@@ -330,6 +359,17 @@ export async function updateRosterTaskAction(dailyRosterId: string, taskId: stri
         changedByUserId: actingUser.id,
       },
     });
+
+    // Keep the live board in sync: if this row is already live (has an
+    // active movement), move it onto the newly-assigned task now rather
+    // than letting the plan and the live movement disagree.
+    const activeMovement = await tx.taskMovement.findFirst({
+      where: { dailyRosterId: dailyRoster.id, status: MovementStatus.ACTIVE },
+    });
+    if (activeMovement && activeMovement.taskId !== task.id) {
+      await closeActiveMovement(tx, dailyRoster.id);
+      await openMovement(tx, dailyRoster, task, actingUser.id, "MOVE_TASK");
+    }
   });
 
   refresh();
@@ -397,6 +437,14 @@ export async function updateRosterTimesAction(
         changes: { startTime: startTimeStr, finishTime: finishTimeStr, reason },
         changedByUserId: actingUser.id,
       },
+    });
+
+    // Keep the live board in sync: an already-open movement's scheduled
+    // finish should track the row's approved finish, same as Extend Shift
+    // is documented to do (see TaskMovement.scheduledFinish in schema.prisma).
+    await tx.taskMovement.updateMany({
+      where: { dailyRosterId: dailyRoster.id, status: MovementStatus.ACTIVE },
+      data: { scheduledFinish: plannedFinish },
     });
   });
 

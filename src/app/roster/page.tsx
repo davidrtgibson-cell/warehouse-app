@@ -41,7 +41,7 @@ export default async function RosterPage(props: PageProps<"/roster">) {
         <header className="space-y-4">
           <div>
             <Link href="/" className="text-sm text-zinc-500 hover:underline">
-              ← Home
+              ← Live board
             </Link>
             <h1 className="text-2xl font-semibold">Employee roster</h1>
             <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">{fmtWorkDate(workDate)}</p>

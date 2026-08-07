@@ -13,14 +13,17 @@ export function ShiftFilterNav({
   basePath,
   dateStr,
   value,
+  includeAll = true,
 }: {
   basePath: string;
   dateStr: string;
   value: ShiftFilterValue;
+  includeAll?: boolean;
 }) {
+  const options = includeAll ? OPTIONS : OPTIONS.filter((opt) => opt.value !== "ALL");
   return (
     <div className="flex items-center gap-1 rounded border border-zinc-300 p-0.5 text-sm dark:border-zinc-700">
-      {OPTIONS.map((opt) => {
+      {options.map((opt) => {
         const active = opt.value === value;
         const href = opt.value === "ALL" ? `${basePath}?date=${dateStr}` : `${basePath}?date=${dateStr}&shift=${opt.value}`;
         return (

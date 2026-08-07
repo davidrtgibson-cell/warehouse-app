@@ -33,7 +33,7 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
           <div className="mx-auto flex max-w-5xl items-center justify-between">
             <nav className="flex gap-4 text-sm">
               <Link href="/" className="hover:underline">
-                Home
+                Live board
               </Link>
               <Link href="/roster" className="hover:underline">
                 Roster

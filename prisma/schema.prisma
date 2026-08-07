@@ -110,6 +110,7 @@ model User {
   resolvedExceptions ExceptionLog[]       @relation("ExceptionResolvedBy")
   auditEntries       AuditLog[]           @relation("AuditChangedBy")
   recordedVolumes    ProductivityVolume[] @relation("VolumeRecordedBy")
+  finalizedRosters   RosterFinalization[] @relation("RosterFinalizedBy")
 
   @@map("users")
 }
@@ -266,6 +267,27 @@ model DailyRoster {
   @@unique([employeeId, workDate, shift])
   @@index([workDate, shift, rosterStatus])
   @@map("daily_rosters")
+}
+
+// Marks a (workDate, shift) as "live" — the leader has bulk-opened a
+// TaskMovement for everyone PLANNED on it (see finalizeRosterAction). Not a
+// lock: the roster stays editable after this, and edits to a row with an
+// active movement update that movement to match (see updateRosterTaskAction
+// / updateRosterTimesAction). The live task board only renders a
+// date/shift once a row exists here; re-finalizing (e.g. after adding
+// casual staff) just updates finalizedAt/finalizedByUserId and starts
+// movements for whichever rows don't have one yet.
+model RosterFinalization {
+  id       String   @id @default(cuid())
+  workDate DateTime @db.Date
+  shift    Shift
+
+  finalizedAt       DateTime @default(now()) @db.Timestamptz
+  finalizedByUserId String
+  finalizedByUser   User     @relation("RosterFinalizedBy", fields: [finalizedByUserId], references: [id])
+
+  @@unique([workDate, shift])
+  @@map("roster_finalizations")
 }
 
 // ---------------------------------------------------------------------------
