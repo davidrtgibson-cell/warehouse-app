@@ -1,0 +1,11 @@
+-- Force this role's session TimeZone to UTC.
+--
+-- Without this, a role/database whose default TimeZone is a non-UTC zone
+-- (e.g. Australia/Sydney, which this app's data is naturally set up in) can
+-- silently corrupt timestamptz writes: some client-side date serialization
+-- paths send naive (offset-less) timestamp text for parameters, which
+-- Postgres then interprets using the session TimeZone rather than UTC —
+-- double-applying the zone offset. Forcing UTC removes the ambiguity these
+-- paths rely on, regardless of which database name this migration runs
+-- against.
+ALTER ROLE CURRENT_USER SET timezone TO 'UTC';

@@ -1,0 +1,404 @@
+// Warehouse Workforce Rostering, Timekeeping & Task-Movement App
+// Schema conventions:
+//  - All primary keys are cuid() strings.
+//  - Timestamps that represent a real moment in time (movement start/finish,
+//    roster generation, audit events) are `DateTime @db.Timestamptz`, stored
+//    in UTC. The app converts to/from Australia/Sydney at the edges.
+//  - "Wall clock" times that are part of a recurring weekly pattern (Standard
+//    Roster start/finish) use `DateTime @db.Time` — no date/timezone attached.
+//  - Admin-configurable lists (Task, Department, BreakRule) all carry
+//    isActive + sortOrder so they can be retired/reordered without deleting
+//    history that references them.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum Shift {
+  AM
+  PM
+  NIGHT
+}
+
+enum DayOfWeek {
+  MONDAY
+  TUESDAY
+  WEDNESDAY
+  THURSDAY
+  FRIDAY
+  SATURDAY
+  SUNDAY
+}
+
+enum EmploymentType {
+  PERMANENT
+  PART_TIME
+  CASUAL
+  AGENCY
+  CONTRACTOR
+}
+
+enum UserRole {
+  LEADER
+  ADMIN
+}
+
+enum TaskCategory {
+  PRODUCTIVE
+  INDIRECT
+  LEAVE
+}
+
+// Daily roster row lifecycle. A row starts PLANNED (generated from Standard
+// Roster or added manually from the Casual/Agency pool). It moves to ABSENT
+// if a leader marks a leave/absence against it, or CANCELLED if removed
+// entirely. There is deliberately no "COMPLETED" state driven by clock-out —
+// v1 has no explicit end-of-shift action (see TaskMovement notes below), so
+// completion is inferred at report time via effective finish, not tracked
+// here as a status transition.
+enum RosterStatus {
+  PLANNED
+  ABSENT
+  CANCELLED
+}
+
+enum RosterSource {
+  STANDARD_ROSTER
+  MANUAL_CASUAL
+}
+
+enum MovementStatus {
+  ACTIVE
+  CLOSED
+}
+
+enum ExceptionType {
+  MISSING_ACTIVE_TASK
+  DUPLICATE_ACTIVE_TASK
+  OVERLAPPING_MOVEMENT
+  MOVEMENT_GAP
+  TASK_TIME_OUTSIDE_SHIFT
+  CORRECTION
+}
+
+// ---------------------------------------------------------------------------
+// People & access
+// ---------------------------------------------------------------------------
+
+// Leaders/admins who operate the board. Auth mechanism is intentionally not
+// finalized yet (see project notes) — this table is the identity anchor that
+// "processed by" / "changed by" columns reference everywhere else.
+model User {
+  id        String   @id @default(cuid())
+  name      String
+  email     String   @unique
+  role      UserRole @default(LEADER)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now()) @db.Timestamptz
+  updatedAt DateTime @updatedAt @db.Timestamptz
+
+  processedMovements TaskMovement[]       @relation("MovementProcessedBy")
+  resolvedExceptions ExceptionLog[]       @relation("ExceptionResolvedBy")
+  auditEntries       AuditLog[]           @relation("AuditChangedBy")
+  recordedVolumes    ProductivityVolume[] @relation("VolumeRecordedBy")
+
+  @@map("users")
+}
+
+// Admin-configurable. Referenced by Employee and used as a reporting
+// filter/column. Not called out explicitly in the brief as needing an admin
+// screen, but it fits the same "list that changes over time" pattern as
+// Task, so it gets the same isActive/sortOrder shape.
+model Department {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  isActive  Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now()) @db.Timestamptz
+  updatedAt DateTime @updatedAt @db.Timestamptz
+
+  employees Employee[]
+
+  @@map("departments")
+}
+
+model Employee {
+  id             String         @id @default(cuid())
+  employeeCode   String         @unique
+  firstName      String
+  lastName       String
+  employmentType EmploymentType
+  agencyName     String?
+  departmentId   String?
+  department     Department?    @relation(fields: [departmentId], references: [id])
+
+  // Used to filter the Casual/Agency pool ("shows all active employees
+  // without a standard-roster pattern for that day, filter by default
+  // shift"). Permanent/part-time staff will also have a default shift that
+  // usually matches their Standard Roster pattern, but it's not derived —
+  // kept as an explicit field so casuals (who have no Standard Roster rows
+  // at all) still have something to filter on.
+  defaultShift Shift?
+
+  // Casual/agency pool membership is "active employee with no standard
+  // roster pattern for the day" — not a separate flag. isActive is the only
+  // lever for keeping the pool clean; per the brief this requires ongoing
+  // maintenance to mark leavers inactive.
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now()) @db.Timestamptz
+  updatedAt DateTime @updatedAt @db.Timestamptz
+
+  standardRosters StandardRoster[]
+  dailyRosters    DailyRoster[]
+  taskMovements   TaskMovement[]
+  exceptions      ExceptionLog[]
+
+  @@index([isActive, defaultShift])
+  @@map("employees")
+}
+
+// ---------------------------------------------------------------------------
+// Tasks (admin-configurable)
+// ---------------------------------------------------------------------------
+
+// Covers productive tasks (GTP Picking, Packing, ...), indirect tasks
+// (Break, Inventory, ...) and leave types (Annual Leave, Personal Leave,
+// Other Leave, LWOP) under one admin-managed list, per the brief's
+// instruction to model leave as a task category rather than a special case.
+model Task {
+  id        String       @id @default(cuid())
+  name      String       @unique
+  category  TaskCategory
+  isActive  Boolean      @default(true)
+  sortOrder Int          @default(0)
+  createdAt DateTime     @default(now()) @db.Timestamptz
+  updatedAt DateTime     @updatedAt @db.Timestamptz
+
+  standardRosters     StandardRoster[]
+  dailyRosters        DailyRoster[]
+  taskMovements       TaskMovement[]
+  productivityVolumes ProductivityVolume[]
+
+  @@map("tasks")
+}
+
+// ---------------------------------------------------------------------------
+// Rostering — standard (recurring) and daily (dated)
+// ---------------------------------------------------------------------------
+
+model StandardRoster {
+  id            String    @id @default(cuid())
+  employeeId    String
+  employee      Employee  @relation(fields: [employeeId], references: [id])
+  dayOfWeek     DayOfWeek
+  shift         Shift
+  startTime     DateTime  @db.Time
+  finishTime    DateTime  @db.Time
+  paidHours     Decimal   @db.Decimal(5, 2)
+  defaultTaskId String
+  defaultTask   Task      @relation(fields: [defaultTaskId], references: [id])
+  effectiveFrom DateTime  @db.Date
+  effectiveTo   DateTime? @db.Date
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now()) @db.Timestamptz
+  updatedAt     DateTime  @updatedAt @db.Timestamptz
+
+  dailyRosters DailyRoster[]
+
+  @@index([employeeId, dayOfWeek, shift, isActive])
+  @@map("standard_rosters")
+}
+
+model DailyRoster {
+  id         String   @id @default(cuid())
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id])
+  workDate   DateTime @db.Date
+  shift      Shift
+
+  plannedStart   DateTime @db.Timestamptz
+  plannedFinish  DateTime @db.Timestamptz
+  // Initially equal to plannedFinish. Changed only via the lightweight
+  // "Extend Shift" action (boolean-ish: new finish time + optional note —
+  // see extensionNote). This is the finish time used as `scheduledFinish`
+  // when opening new movements and as the cap in effective-finish
+  // calculations.
+  approvedFinish DateTime @db.Timestamptz
+
+  defaultTaskId String
+  defaultTask   Task   @relation(fields: [defaultTaskId], references: [id])
+
+  rosterStatus RosterStatus @default(PLANNED)
+  rosterSource RosterSource
+
+  standardRosterId String?
+  standardRoster   StandardRoster? @relation(fields: [standardRosterId], references: [id])
+
+  // Free-text reason for any manual deviation from the generated pattern
+  // (e.g. why a permanent employee's daily row was hand-edited).
+  overrideReason String?
+
+  // Extend Shift — deliberately just a flag + note, no formal
+  // approval workflow (out of scope per brief).
+  shiftExtended Boolean @default(false)
+  extensionNote String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz
+  updatedAt DateTime @updatedAt @db.Timestamptz
+
+  taskMovements TaskMovement[]
+  exceptions    ExceptionLog[]
+
+  // One row per employee per work date/shift — this is what makes roster
+  // generation idempotent (generation upserts on this key and skips
+  // existing rows) and what the casual pool "already on roster" exclusion
+  // filters against.
+  @@unique([employeeId, workDate, shift])
+  @@index([workDate, shift, rosterStatus])
+  @@map("daily_rosters")
+}
+
+// ---------------------------------------------------------------------------
+// Task movements — the live board's core record
+// ---------------------------------------------------------------------------
+
+model TaskMovement {
+  id         String   @id @default(cuid())
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id])
+
+  dailyRosterId String
+  dailyRoster   DailyRoster @relation(fields: [dailyRosterId], references: [id])
+
+  taskId String
+  task   Task   @relation(fields: [taskId], references: [id])
+
+  startTime       DateTime  @db.Timestamptz
+  // Copied from the daily roster's approvedFinish at the moment this
+  // movement is opened. If the shift is later extended, existing movements'
+  // scheduledFinish is updated to match (see Extend Shift behaviour in the
+  // brief); this keeps effective-finish calculations correct for whichever
+  // movement is active when the extension happens.
+  scheduledFinish DateTime  @db.Timestamptz
+  actualFinish    DateTime? @db.Timestamptz
+  // Duration in minutes, written once when the movement is closed (actual
+  // finish is set). Never computed as `now() - startTime` for an open row —
+  // that's exactly the unbounded-clock drift the effective-finish concept
+  // exists to avoid. Reporting on an ACTIVE row uses
+  // effective_finish = COALESCE(actual_finish, scheduled_finish) instead.
+  durationMinutes Int?
+
+  status MovementStatus @default(ACTIVE)
+
+  processedByUserId String
+  processedByUser   User   @relation("MovementProcessedBy", fields: [processedByUserId], references: [id])
+
+  createdAt DateTime @default(now()) @db.Timestamptz
+  updatedAt DateTime @updatedAt @db.Timestamptz
+
+  exceptions ExceptionLog[]
+
+  @@index([employeeId, status])
+  @@index([dailyRosterId, status])
+  @@map("task_movements")
+}
+
+// ---------------------------------------------------------------------------
+// Break rules (admin-configurable)
+// ---------------------------------------------------------------------------
+
+model BreakRule {
+  id             String   @id @default(cuid())
+  description    String
+  minHoursWorked Decimal  @db.Decimal(5, 2)
+  unpaidMinutes  Int
+  isActive       Boolean  @default(true)
+  sortOrder      Int      @default(0)
+  createdAt      DateTime @default(now()) @db.Timestamptz
+  updatedAt      DateTime @updatedAt @db.Timestamptz
+
+  @@map("break_rules")
+}
+
+// ---------------------------------------------------------------------------
+// Productivity volumes
+// ---------------------------------------------------------------------------
+
+// Minimal per brief: reporting spec was explicitly trimmed and doesn't use
+// this yet, but the data model calls it out. Units are deliberately just a
+// decimal with no cost/costing fields — costing stays downstream.
+model ProductivityVolume {
+  id       String   @id @default(cuid())
+  workDate DateTime @db.Date
+  shift    Shift
+  taskId   String
+  task     Task     @relation(fields: [taskId], references: [id])
+  units    Decimal  @db.Decimal(10, 2)
+  notes    String?
+
+  recordedByUserId String
+  recordedByUser   User   @relation("VolumeRecordedBy", fields: [recordedByUserId], references: [id])
+
+  createdAt DateTime @default(now()) @db.Timestamptz
+  updatedAt DateTime @updatedAt @db.Timestamptz
+
+  @@index([workDate, shift, taskId])
+  @@map("productivity_volumes")
+}
+
+// ---------------------------------------------------------------------------
+// Exceptions & audit
+// ---------------------------------------------------------------------------
+
+// System-detected data-quality issues (missing active task, overlapping
+// movements, etc). Distinct from AuditLog, which records manual corrections
+// leaders/admins make. An exception can reference the movement and/or
+// daily roster it concerns; both are optional since some exception types
+// (e.g. missing active task) are about an *absence* of a movement.
+model ExceptionLog {
+  id             String        @id @default(cuid())
+  type           ExceptionType
+  employeeId     String?
+  employee       Employee?     @relation(fields: [employeeId], references: [id])
+  dailyRosterId  String?
+  dailyRoster    DailyRoster?  @relation(fields: [dailyRosterId], references: [id])
+  taskMovementId String?
+  taskMovement   TaskMovement? @relation(fields: [taskMovementId], references: [id])
+
+  description      String
+  detectedAt       DateTime  @default(now()) @db.Timestamptz
+  resolvedAt       DateTime? @db.Timestamptz
+  resolvedByUserId String?
+  resolvedByUser   User?     @relation("ExceptionResolvedBy", fields: [resolvedByUserId], references: [id])
+
+  @@index([type, resolvedAt])
+  @@map("exception_logs")
+}
+
+// Generic "who changed what" trail for manual corrections across entities
+// (movement edits, daily roster edits, etc). Kept as one flexible table
+// rather than one audit table per entity, since corrections are expected to
+// be occasional, not high-volume.
+model AuditLog {
+  id              String   @id @default(cuid())
+  entityType      String
+  entityId        String
+  action          String
+  changes         Json?
+  changedByUserId String
+  changedByUser   User     @relation("AuditChangedBy", fields: [changedByUserId], references: [id])
+  createdAt       DateTime @default(now()) @db.Timestamptz
+
+  @@index([entityType, entityId])
+  @@map("audit_logs")
+}
