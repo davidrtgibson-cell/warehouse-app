@@ -16,6 +16,7 @@ import { DateNav } from "@/components/DateNav";
 import { ShiftFilterNav } from "@/components/ShiftFilter";
 import { CasualPoolPanel } from "@/components/CasualPoolPanel";
 import { SelectAllCheckbox } from "@/components/SelectAllCheckbox";
+import { RosterSearchBox } from "@/components/RosterSearchBox";
 import { ConfirmSubmitButton } from "@/components/ConfirmSubmitButton";
 import { InlineTaskCell } from "@/components/InlineTaskCell";
 import { InlineTimesCell } from "@/components/InlineTimesCell";
@@ -108,9 +109,12 @@ export default async function BuildRosterPage(props: PageProps<"/roster/build">)
   const pendingGenerateCount = Math.max(0, eligibleStandardRosterCount - generatedFromStandardCount);
 
   const SORTERS: Record<SortKey, (a: Row, b: Row) => number> = {
+    // Sorts on the same "First Last" order the Employee column displays —
+    // sorting by last name here (while showing first name first) made the
+    // list look unsorted to anyone scanning the visible text.
     name: (a, b) =>
-      `${a.employee.lastName} ${a.employee.firstName}`.localeCompare(
-        `${b.employee.lastName} ${b.employee.firstName}`
+      `${a.employee.firstName} ${a.employee.lastName}`.localeCompare(
+        `${b.employee.firstName} ${b.employee.lastName}`
       ),
     department: (a, b) => (a.employee.department?.name ?? "").localeCompare(b.employee.department?.name ?? ""),
     type: (a, b) => a.employee.employmentType.localeCompare(b.employee.employmentType),
@@ -282,6 +286,7 @@ export default async function BuildRosterPage(props: PageProps<"/roster/build">)
         </section>
 
         <section className="flex flex-wrap items-center gap-2 rounded-lg border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-950">
+          <RosterSearchBox />
           <SelectAllCheckbox formId={BULK_FORM_ID} name="dailyRosterId" />
           <span className="text-xs text-zinc-500">Select all visible, then:</span>
           <form id={BULK_FORM_ID} action={bulkMarkAbsentAction} className="flex items-center gap-2">
@@ -345,7 +350,11 @@ export default async function BuildRosterPage(props: PageProps<"/roster/build">)
                         const window = row.standardRosterId ? standardWindowById.get(row.standardRosterId) : undefined;
                         const fieldsDisabled = !currentUser || row.rosterStatus !== RosterStatus.PLANNED;
                         return (
-                          <tr key={row.id} className="bg-white align-top dark:bg-zinc-950">
+                          <tr
+                            key={row.id}
+                            data-search={`${row.employee.firstName} ${row.employee.lastName} ${row.employee.employeeCode}`.toLowerCase()}
+                            className="bg-white align-top dark:bg-zinc-950"
+                          >
                             <td className="px-2 py-2">
                               {row.rosterStatus === RosterStatus.PLANNED && (
                                 <input

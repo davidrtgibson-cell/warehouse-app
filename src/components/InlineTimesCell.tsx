@@ -71,7 +71,7 @@ export function InlineTimesCell({
 
   if (disabled) {
     return (
-      <span className="font-mono text-xs">
+      <span className="whitespace-nowrap font-mono text-xs">
         {plannedStartHHMM}–{plannedFinishHHMM}
       </span>
     );
@@ -83,7 +83,7 @@ export function InlineTimesCell({
         type="button"
         onClick={() => setEditing(true)}
         title="Click to change times"
-        className="font-mono text-xs underline decoration-dotted decoration-zinc-400 hover:decoration-solid"
+        className="whitespace-nowrap font-mono text-xs underline decoration-dotted decoration-zinc-400 hover:decoration-solid"
       >
         {plannedStartHHMM}–{plannedFinishHHMM}
       </button>

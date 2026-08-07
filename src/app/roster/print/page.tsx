@@ -47,8 +47,8 @@ export default async function RosterPrintPage(props: PageProps<"/roster/print">)
       .map((entry) => ({
         ...entry,
         rows: entry.rows.sort((a, b) =>
-          `${a.employee.lastName} ${a.employee.firstName}`.localeCompare(
-            `${b.employee.lastName} ${b.employee.firstName}`
+          `${a.employee.firstName} ${a.employee.lastName}`.localeCompare(
+            `${b.employee.firstName} ${b.employee.lastName}`
           )
         ),
       }))

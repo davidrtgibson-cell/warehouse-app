@@ -26,8 +26,8 @@ export default async function RosterPage(props: PageProps<"/roster">) {
   for (const row of rows) byShift.get(row.shift)?.push(row);
   for (const list of byShift.values()) {
     list.sort((a, b) =>
-      `${a.employee.lastName} ${a.employee.firstName}`.localeCompare(
-        `${b.employee.lastName} ${b.employee.firstName}`
+      `${a.employee.firstName} ${a.employee.lastName}`.localeCompare(
+        `${b.employee.firstName} ${b.employee.lastName}`
       )
     );
   }
@@ -110,7 +110,7 @@ export default async function RosterPage(props: PageProps<"/roster">) {
                           <td className="px-3 py-2 text-zinc-600 dark:text-zinc-400">
                             {formatEmploymentType(row.employee.employmentType, row.employee.agencyName)}
                           </td>
-                          <td className="px-3 py-2 font-mono text-xs">
+                          <td className="whitespace-nowrap px-3 py-2 font-mono text-xs">
                             {fmtTimeSydney(row.plannedStart)}–{fmtTimeSydney(row.approvedFinish)}
                             {row.shiftExtended && (
                               <span
