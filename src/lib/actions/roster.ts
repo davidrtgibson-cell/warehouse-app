@@ -7,9 +7,9 @@ import { standardRosterEligibilityWhere } from "@/lib/roster-queries";
 import {
   DATE_RE,
   dayOfWeekForDateString,
+  getShiftWindows,
   parseTimeString,
   plannedWindow,
-  SHIFT_WINDOWS,
   hoursMinutesFromTimeValue,
 } from "@/lib/schedule";
 import { dateOnlyFromString, toDateOnlyString } from "@/lib/format";
@@ -455,10 +455,18 @@ export async function updateRosterTimesAction(
 // Casual/Agency pool — add to roster
 // ---------------------------------------------------------------------------
 
+// `customHours`, when provided, overrides the shift's canonical window for
+// every row in this batch — the "bring some casuals in 10am-6pm for a
+// mid-shift" case. Each row still files under whichever AM/PM/NIGHT bucket
+// its own `entry.shift` picks (live-board grouping/finalize only); the
+// actual planned/approved times come from the override, not from
+// getShiftWindows(). Deliberately batch-level, not per-row — matches the
+// existing single shared "assign task" control this shares a submit with.
 export async function addCasualToRoster(
   dateStr: string,
   taskId: string,
-  entries: { employeeId: string; shift: Shift }[]
+  entries: { employeeId: string; shift: Shift }[],
+  customHours?: { startTimeStr: string; finishTimeStr: string }
 ) {
   if (!DATE_RE.test(dateStr)) throw new Error("Invalid date");
   if (entries.length === 0) throw new Error("No employees selected");
@@ -471,6 +479,17 @@ export async function addCasualToRoster(
   });
   if (!task) throw new Error("Invalid task");
 
+  let customWindow: { start: [number, number]; finish: [number, number] } | null = null;
+  if (customHours) {
+    const start = parseTimeString(customHours.startTimeStr);
+    const finish = parseTimeString(customHours.finishTimeStr);
+    if (start[0] === finish[0] && start[1] === finish[1]) {
+      throw new Error("Start and finish can't be the same time");
+    }
+    customWindow = { start, finish };
+  }
+  const shiftWindows = customWindow ? null : await getShiftWindows();
+
   const employees = await prisma.employee.findMany({
     where: { id: { in: entries.map((e) => e.employeeId) }, isActive: true },
   });
@@ -480,7 +499,7 @@ export async function addCasualToRoster(
     const employee = employeeById.get(entry.employeeId);
     if (!employee) return [];
 
-    const window = SHIFT_WINDOWS[entry.shift];
+    const window = customWindow ?? shiftWindows![entry.shift];
     const { plannedStart, plannedFinish } = plannedWindow(dateStr, window.start, window.finish);
 
     return [
@@ -506,7 +525,13 @@ export async function addCasualToRoster(
       entityType: "DailyRoster",
       entityId: dateStr,
       action: "ADD_CASUAL_TO_ROSTER",
-      changes: { workDate: dateStr, task: task.name, requested: entries.length, created: result.count },
+      changes: {
+        workDate: dateStr,
+        task: task.name,
+        requested: entries.length,
+        created: result.count,
+        customHours: customHours ? { start: customHours.startTimeStr, finish: customHours.finishTimeStr } : null,
+      },
       changedByUserId: actingUser.id,
     },
   });

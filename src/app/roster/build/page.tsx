@@ -344,7 +344,14 @@ export default async function BuildRosterPage(props: PageProps<"/roster/build">)
         </section>
 
         <section>
-          <h2 className="mb-2 text-sm font-semibold text-zinc-500">Casual / agency pool</h2>
+          <h2 className="mb-2 text-sm font-semibold text-zinc-500">
+            Add to roster (casual / agency / no standard-roster coverage)
+          </h2>
+          <p className="mb-2 text-xs text-zinc-500">
+            Every active employee not already on this date&apos;s roster — including permanent/part-time
+            staff on a day with no Standard Roster coverage (e.g. weekend overtime shifts). Use &quot;Custom
+            hours&quot; below for a non-conventional window, like a 10am–6pm mid-shift.
+          </p>
           <CasualPoolPanel
             dateStr={dateStr}
             employees={poolEmployees}

@@ -119,12 +119,17 @@ async function main() {
   await prisma.auditLog.deleteMany();
   await prisma.productivityVolume.deleteMany();
   await prisma.taskMovement.deleteMany();
+  // Not hit until a live-board session actually finalizes a roster (this
+  // table stays empty from a fresh seed onward otherwise) — a re-seed after
+  // any "Finalise Roster" use needs this cleared before dailyRoster/user.
+  await prisma.rosterFinalization.deleteMany();
   await prisma.dailyRoster.deleteMany();
   await prisma.standardRoster.deleteMany();
   await prisma.employee.deleteMany();
   await prisma.task.deleteMany();
   await prisma.breakRule.deleteMany();
   await prisma.department.deleteMany();
+  await prisma.shiftWindow.deleteMany();
   await prisma.user.deleteMany();
 
   // --- Users (leaders/admins who "process" moves, resolve exceptions, etc.) ---
@@ -157,6 +162,16 @@ async function main() {
   const departmentNames = ["Inbound", "Outbound", "Inventory Control", "Value Added Services", "Support Services"];
   const departments = departmentNames.map((name, i) => ({ id: randomUUID(), name, sortOrder: i }));
   await prisma.department.createMany({ data: departments });
+
+  // --- Shift windows (settings — canonical AM/PM/NIGHT hours, editable via /settings/shifts) ---
+  console.log("Seeding shift windows...");
+  await prisma.shiftWindow.createMany({
+    data: (Object.keys(SHIFT_TIMES) as Shift[]).map((shift) => ({
+      shift,
+      startTime: timeOnly(...SHIFT_TIMES[shift].start),
+      finishTime: timeOnly(...SHIFT_TIMES[shift].finish),
+    })),
+  });
 
   // --- Tasks (admin-configurable) ---
   console.log("Seeding tasks...");

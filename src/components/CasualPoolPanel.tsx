@@ -78,6 +78,13 @@ export function CasualPoolPanel({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [rowShift, setRowShift] = useState<Record<string, Shift>>({});
   const [taskId, setTaskId] = useState(tasks[0]?.id ?? "");
+  // Batch-level, not per-row — matches the single shared "assign task"
+  // control below. Each person still gets an AM/PM/NIGHT bucket from their
+  // own Shift column (for live-board grouping/finalize); this only
+  // overrides the *hours*, for things like a one-off 10am-6pm mid-shift.
+  const [useCustomHours, setUseCustomHours] = useState(false);
+  const [customStart, setCustomStart] = useState("10:00");
+  const [customFinish, setCustomFinish] = useState("18:00");
   const [message, setMessage] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const [sortKey, setSortKey] = useState<SortKey>("name");
@@ -135,15 +142,21 @@ export function CasualPoolPanel({
 
   function handleAdd() {
     if (selectedIds.size === 0 || !taskId) return;
+    if (useCustomHours && customStart === customFinish) {
+      setMessage("Custom start and finish can't be the same time.");
+      return;
+    }
     const entries = Array.from(selectedIds).map((id) => {
       const employee = employees.find((e) => e.id === id);
       return { employeeId: id, shift: employee ? shiftFor(employee) : Shift.AM };
     });
+    const customHours = useCustomHours ? { startTimeStr: customStart, finishTimeStr: customFinish } : undefined;
 
     startTransition(async () => {
       try {
-        const result = await addCasualToRoster(dateStr, taskId, entries);
-        setMessage(`Added ${result.created} of ${entries.length} selected to the roster.`);
+        const result = await addCasualToRoster(dateStr, taskId, entries, customHours);
+        const hoursNote = useCustomHours ? ` (${customStart}–${customFinish})` : "";
+        setMessage(`Added ${result.created} of ${entries.length} selected to the roster${hoursNote}.`);
         setSelectedIds(new Set());
       } catch (err) {
         setMessage(err instanceof Error ? err.message : "Failed to add to roster.");
@@ -274,6 +287,31 @@ export function CasualPoolPanel({
             </option>
           ))}
         </select>
+        <label className="flex items-center gap-1 text-xs text-zinc-500">
+          <input
+            type="checkbox"
+            checked={useCustomHours}
+            onChange={(e) => setUseCustomHours(e.target.checked)}
+          />
+          Custom hours
+        </label>
+        {useCustomHours && (
+          <div className="flex items-center gap-1">
+            <input
+              type="time"
+              value={customStart}
+              onChange={(e) => setCustomStart(e.target.value)}
+              className="w-[6.5rem] rounded border border-zinc-300 bg-white px-1.5 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-950"
+            />
+            <span className="text-xs text-zinc-500">–</span>
+            <input
+              type="time"
+              value={customFinish}
+              onChange={(e) => setCustomFinish(e.target.value)}
+              className="w-[6.5rem] rounded border border-zinc-300 bg-white px-1.5 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-950"
+            />
+          </div>
+        )}
         <button
           type="button"
           disabled={disabled || isPending || selectedIds.size === 0 || !taskId}
@@ -287,6 +325,12 @@ export function CasualPoolPanel({
           <span className="text-xs text-amber-600 dark:text-amber-400">
             Select an acting user above to add employees.
           </span>
+        )}
+        {useCustomHours && (
+          <p className="w-full text-[11px] text-zinc-500">
+            Each person still gets an AM/PM/NIGHT bucket from the Shift column above (for board grouping) —
+            actual planned hours come from the custom window here.
+          </p>
         )}
       </div>
     </div>

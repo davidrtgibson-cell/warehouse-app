@@ -291,6 +291,31 @@ model RosterFinalization {
 }
 
 // ---------------------------------------------------------------------------
+// Settings — admin-configurable values with no list semantics (exactly one
+// row per Shift enum value, not an add/remove/reorder list like
+// Task/Department/BreakRule, so no isActive/sortOrder here).
+// ---------------------------------------------------------------------------
+
+// Replaces the formerly-hardcoded SHIFT_WINDOWS constant in
+// src/lib/schedule.ts. 1:1 keyed to the existing Shift enum — deliberately
+// not a new enum and not a replacement for Shift itself, so every other
+// model that already carries a `shift Shift` column is untouched. A
+// non-conventional/ad-hoc roster block (e.g. a 10am-6pm mid-shift) doesn't
+// get its own row here — it still files under one of these 3 buckets for
+// live-board/finalize purposes, with an explicit custom start/finish
+// overriding the bucket's canonical window (see addCasualToRoster).
+model ShiftWindow {
+  id         String   @id @default(cuid())
+  shift      Shift    @unique
+  startTime  DateTime @db.Time
+  finishTime DateTime @db.Time
+  createdAt  DateTime @default(now()) @db.Timestamptz
+  updatedAt  DateTime @updatedAt @db.Timestamptz
+
+  @@map("shift_windows")
+}
+
+// ---------------------------------------------------------------------------
 // Task movements — the live board's core record
 // ---------------------------------------------------------------------------
 

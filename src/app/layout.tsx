@@ -41,6 +41,9 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
               <Link href="/roster/build" className="hover:underline">
                 Build roster
               </Link>
+              <Link href="/settings" className="hover:underline">
+                Settings
+              </Link>
             </nav>
             <ActingAsPicker users={actingUsers} currentUserId={currentUser?.id ?? null} />
           </div>

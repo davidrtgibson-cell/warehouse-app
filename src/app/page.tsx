@@ -2,25 +2,48 @@ import Link from "next/link";
 import { prisma } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { MovementStatus, RosterStatus, Shift, TaskCategory } from "@/generated/prisma/client";
-import { dateOnlyFromString, fmtTimeSydney, fmtWorkDate } from "@/lib/format";
-import { resolveWorkDate } from "@/lib/schedule";
+import { dateOnlyFromString, fmtTimeSydney, fmtWorkDate, toDateOnlyString } from "@/lib/format";
+import { currentShiftAndDateFor, DATE_RE, getShiftWindows, sydneyNowMinutesOfDay, todaySydneyDateString } from "@/lib/schedule";
 import { DateNav } from "@/components/DateNav";
 import { ShiftFilterNav } from "@/components/ShiftFilter";
 import { LiveBoardGrid, type BoardTaskGroup } from "@/components/LiveBoardGrid";
+import { formatDuration, plannedMinutesOnTask } from "@/lib/board-time";
 
 export const dynamic = "force-dynamic";
 
-function parseShift(value: string | undefined): Shift {
-  if (value === Shift.AM || value === Shift.PM || value === Shift.NIGHT) return value;
-  return Shift.AM;
-}
-
 export default async function LiveBoardPage(props: PageProps<"/">) {
   const sp = await props.searchParams;
-  const requested = typeof sp.date === "string" ? sp.date : undefined;
-  const dateStr = await resolveWorkDate(requested);
+
+  // No explicit date/shift in the URL (e.g. clicking the "Live board" nav
+  // link) defaults to whatever's genuinely live right now — today's date,
+  // and the shift whose Settings-configured window contains the current
+  // time — rather than "most recent date with a roster" + hardcoded AM,
+  // which is what the other pages still use (fine there; this one is
+  // specifically meant to reflect "right now").
+  const shiftWindows = await getShiftWindows();
+  const todayStr = todaySydneyDateString();
+  const { shift: currentLiveShift, dateStr: currentLiveDateStr } = currentShiftAndDateFor(
+    shiftWindows,
+    todayStr,
+    sydneyNowMinutesOfDay()
+  );
+
+  const requestedDate = typeof sp.date === "string" ? sp.date : undefined;
+  const dateStr = requestedDate && DATE_RE.test(requestedDate) ? requestedDate : currentLiveDateStr;
   const workDate = dateOnlyFromString(dateStr);
-  const shift = parseShift(typeof sp.shift === "string" ? sp.shift : undefined);
+
+  const requestedShift = typeof sp.shift === "string" ? sp.shift : undefined;
+  const shift: Shift =
+    requestedShift === Shift.AM || requestedShift === Shift.PM || requestedShift === Shift.NIGHT
+      ? requestedShift
+      : currentLiveShift;
+
+  // Drag-and-drop is a "right now" gesture with no time picker of its own
+  // (see LiveBoardGrid) — only makes sense when the shift being viewed is
+  // the one actually live at this moment, not some other date/shift being
+  // browsed for review or correction (those still use the checkbox+dropdown
+  // Move/Extend flows, which do have explicit time controls).
+  const isLiveShift = dateStr === currentLiveDateStr && shift === currentLiveShift;
 
   const currentUser = await getCurrentUser();
 
@@ -65,6 +88,7 @@ export default async function LiveBoardPage(props: PageProps<"/">) {
             currentUserId={currentUser?.id ?? null}
             finalizedAt={finalization.finalizedAt}
             finalizedByName={finalization.finalizedByUser.name}
+            isLiveShift={isLiveShift}
           />
         )}
       </div>
@@ -78,12 +102,14 @@ async function BoardContent({
   currentUserId,
   finalizedAt,
   finalizedByName,
+  isLiveShift,
 }: {
   workDate: Date;
   shift: Shift;
   currentUserId: string | null;
   finalizedAt: Date;
   finalizedByName: string;
+  isLiveShift: boolean;
 }) {
   const [rows, addableTasks] = await Promise.all([
     prisma.dailyRoster.findMany({
@@ -96,11 +122,31 @@ async function BoardContent({
     }),
   ]);
 
-  const activeMovements = await prisma.taskMovement.findMany({
-    where: { dailyRosterId: { in: rows.map((r) => r.id) }, status: MovementStatus.ACTIVE },
-    include: { task: true },
-  });
+  const [activeMovements, closedMinutesByTask] = await Promise.all([
+    prisma.taskMovement.findMany({
+      where: { dailyRosterId: { in: rows.map((r) => r.id) }, status: MovementStatus.ACTIVE },
+      include: { task: true },
+    }),
+    // Everyone who has already moved off a task today still counts toward its
+    // labour-hours total, so this is scoped by workDate/shift via the roster
+    // relation rather than the PLANNED-only `rows` set above (it should still
+    // count someone's worked minutes even if they were later marked absent
+    // or removed from the roster).
+    prisma.taskMovement.groupBy({
+      by: ["taskId"],
+      where: { status: MovementStatus.CLOSED, dailyRoster: { workDate, shift } },
+      _sum: { durationMinutes: true },
+    }),
+  ]);
   const movementByRosterId = new Map(activeMovements.map((m) => [m.dailyRosterId, m]));
+  const closedMinutesMap = new Map(closedMinutesByTask.map((g) => [g.taskId, g._sum.durationMinutes ?? 0]));
+  const closedMinutesShiftTotal = closedMinutesByTask.reduce((sum, g) => sum + (g._sum.durationMinutes ?? 0), 0);
+  // Projected, not live-ticking — see plannedMinutesOnTask in board-time.ts.
+  // Plain server-computed value now that it no longer needs a client-side
+  // clock, so this stat doesn't need its own client component.
+  const shiftTotalMinutes =
+    closedMinutesShiftTotal +
+    activeMovements.reduce((sum, m) => sum + plannedMinutesOnTask(m.startTime, m.scheduledFinish), 0);
 
   const byTask = new Map<string, { taskName: string; sortOrder: number; group: BoardTaskGroup }>();
   let notYetLive = 0;
@@ -114,7 +160,12 @@ async function BoardContent({
     const bucket = byTask.get(movement.taskId) ?? {
       taskName: movement.task.name,
       sortOrder: movement.task.sortOrder,
-      group: { taskId: movement.taskId, taskName: movement.task.name, entries: [] },
+      group: {
+        taskId: movement.taskId,
+        taskName: movement.task.name,
+        entries: [],
+        closedMinutesThisShift: closedMinutesMap.get(movement.taskId) ?? 0,
+      },
     };
     bucket.group.entries.push({
       dailyRosterId: row.id,
@@ -123,6 +174,7 @@ async function BoardContent({
       employeeCode: row.employee.employeeCode,
       departmentName: row.employee.department?.name ?? null,
       startTime: movement.startTime,
+      scheduledFinish: movement.scheduledFinish,
     });
     byTask.set(movement.taskId, bucket);
   }
@@ -147,6 +199,10 @@ async function BoardContent({
           <div>
             <span className="text-zinc-500">Tasks in use: </span>
             <span className="font-medium">{taskGroups.length}</span>
+          </div>
+          <div>
+            <span className="text-zinc-500">Total shift hours: </span>
+            <span className="font-medium">{formatDuration(shiftTotalMinutes)}</span>
           </div>
           {notYetLive > 0 && (
             <div>
@@ -182,6 +238,9 @@ async function BoardContent({
           taskGroups={taskGroups}
           addableTasks={addableTasks.map((t) => ({ id: t.id, name: t.name }))}
           disabled={!currentUserId}
+          workDateStr={toDateOnlyString(workDate)}
+          shift={shift}
+          isLiveShift={isLiveShift}
         />
       )}
     </>

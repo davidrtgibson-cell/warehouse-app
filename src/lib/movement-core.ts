@@ -10,19 +10,18 @@ type TxClient = Prisma.TransactionClient;
 // server-only logic, which is why it lives outside either 'use server'
 // file (a 'use server' file may only export async functions callable as
 // actions).
-export async function closeActiveMovement(tx: TxClient, dailyRosterId: string) {
+export async function closeActiveMovement(tx: TxClient, dailyRosterId: string, at: Date = new Date()) {
   const activeMovement = await tx.taskMovement.findFirst({
     where: { dailyRosterId, status: MovementStatus.ACTIVE },
   });
   if (!activeMovement) return;
 
-  const now = new Date();
   await tx.taskMovement.update({
     where: { id: activeMovement.id },
     data: {
       status: MovementStatus.CLOSED,
-      actualFinish: now,
-      durationMinutes: Math.round((now.getTime() - activeMovement.startTime.getTime()) / 60000),
+      actualFinish: at,
+      durationMinutes: Math.round((at.getTime() - activeMovement.startTime.getTime()) / 60000),
     },
   });
 }
