@@ -185,6 +185,7 @@ model Employee {
   dailyRosters    DailyRoster[]
   taskMovements   TaskMovement[]
   exceptions      ExceptionLog[]
+  plannedLeaves   PlannedLeave[]
 
   @@index([isActive, defaultShift])
   @@map("employees")
@@ -220,8 +221,41 @@ model Task {
   dailyRosters        DailyRoster[]
   taskMovements       TaskMovement[]
   productivityVolumes ProductivityVolume[]
+  plannedLeaves       PlannedLeave[]
 
   @@map("tasks")
+}
+
+// ---------------------------------------------------------------------------
+// Planned leave (admin-configurable, per employee)
+// ---------------------------------------------------------------------------
+
+// A future date range an employee is known to be on leave, entered ahead of
+// time (BACKLOG.md Tier 2 #1) — distinct from unplanned leave (sick, goes
+// home mid-shift), which is already fully handled on the live board/roster
+// builder via a Move or markAbsentAction and needs no new modeling here.
+// Deliberately doesn't touch DailyRoster directly: instead,
+// generateDailyRosterFromStandard (src/lib/actions/roster.ts) checks this
+// table at generation time and substitutes taskId for the employee's usual
+// Standard Roster task on any date it covers — so they're pre-flagged
+// before the shift is even built, no same-day "mark absent" step needed.
+// Deleting a row only affects roster rows not yet generated; it never
+// retroactively touches DailyRoster rows already created from it (same
+// "never generate retroactively" rule every other roster-generation path
+// in this app already follows).
+model PlannedLeave {
+  id         String   @id @default(cuid())
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id])
+  taskId     String
+  task       Task     @relation(fields: [taskId], references: [id])
+  dateFrom   DateTime @db.Date
+  dateTo     DateTime @db.Date
+  createdAt  DateTime @default(now()) @db.Timestamptz
+  updatedAt  DateTime @updatedAt @db.Timestamptz
+
+  @@index([employeeId, dateFrom, dateTo])
+  @@map("planned_leaves")
 }
 
 // ---------------------------------------------------------------------------

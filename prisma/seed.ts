@@ -133,6 +133,8 @@ async function main() {
   await prisma.rosterFinalization.deleteMany();
   await prisma.dailyRoster.deleteMany();
   await prisma.standardRoster.deleteMany();
+  // References both Employee and Task — must clear before either.
+  await prisma.plannedLeave.deleteMany();
   await prisma.employee.deleteMany();
   await prisma.task.deleteMany();
   await prisma.breakRule.deleteMany();

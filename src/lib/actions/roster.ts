@@ -48,6 +48,17 @@ export async function generateDailyRosterFromStandard(dateStr: string) {
   });
   const existingKeys = new Set(existing.map((e) => `${e.employeeId}:${e.shift}`));
 
+  // Planned leave (BACKLOG.md Tier 2 #1, Settings > Planned leave) covering
+  // this date — substitutes the employee's usual Standard Roster task with
+  // the leave task, so they're pre-flagged as on leave before the shift is
+  // even built rather than needing a same-day "mark absent". rosterStatus
+  // stays PLANNED (not ABSENT) — this is a normal, already-known roster row,
+  // just against a leave task instead of their regular one.
+  const plannedLeaves = await prisma.plannedLeave.findMany({
+    where: { dateFrom: { lte: workDate }, dateTo: { gte: workDate } },
+  });
+  const leaveTaskByEmployeeId = new Map(plannedLeaves.map((pl) => [pl.employeeId, pl.taskId]));
+
   const rowsToCreate = standardRosters
     .filter((sr) => !existingKeys.has(`${sr.employeeId}:${sr.shift}`))
     .map((sr) => {
@@ -65,7 +76,7 @@ export async function generateDailyRosterFromStandard(dateStr: string) {
         plannedStart,
         plannedFinish,
         approvedFinish: plannedFinish,
-        defaultTaskId: sr.defaultTaskId,
+        defaultTaskId: leaveTaskByEmployeeId.get(sr.employeeId) ?? sr.defaultTaskId,
         rosterStatus: RosterStatus.PLANNED,
         rosterSource: RosterSource.STANDARD_ROSTER,
         standardRosterId: sr.id,

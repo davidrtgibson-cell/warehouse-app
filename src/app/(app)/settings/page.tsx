@@ -32,6 +32,11 @@ const SETTINGS_SECTIONS = [
     description: "The recurring weekly work pattern each employee is rostered against.",
   },
   {
+    href: "/settings/planned-leave",
+    label: "Planned leave",
+    description: "Known future leave, entered ahead of time — pre-flagged when the roster is generated.",
+  },
+  {
     href: "/settings/break-rules",
     label: "Break rules",
     description: "Unpaid meal-break deductions by hours worked — editable per your EA/business rules.",
