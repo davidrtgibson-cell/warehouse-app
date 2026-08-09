@@ -21,7 +21,13 @@ export default async function ShiftSettingsPage() {
     const row = byShift.get(shift);
     const start = row ? hoursMinutesFromTimeValue(row.startTime) : { hours: 0, minutes: 0 };
     const finish = row ? hoursMinutesFromTimeValue(row.finishTime) : { hours: 0, minutes: 0 };
-    return { shift, startHHMM: hhmm(start.hours, start.minutes), finishHHMM: hhmm(finish.hours, finish.minutes) };
+    const breakStart = row?.breakStartTime ? hoursMinutesFromTimeValue(row.breakStartTime) : null;
+    return {
+      shift,
+      startHHMM: hhmm(start.hours, start.minutes),
+      finishHHMM: hhmm(finish.hours, finish.minutes),
+      breakStartHHMM: breakStart ? hhmm(breakStart.hours, breakStart.minutes) : null,
+    };
   });
 
   return (
@@ -35,7 +41,13 @@ export default async function ShiftSettingsPage() {
           <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
             Canonical AM/PM/NIGHT start &amp; finish times, used to plan casual/agency additions to the roster
             and to interpret times entered on the live board. Editing here does not retroactively change
-            already-planned roster rows.
+            already-planned roster rows. Each shift&apos;s scheduled break time controls which task&apos;s
+            hours the unpaid deduction (see{" "}
+            <Link href="/settings/break-rules" className="underline">
+              Break rules
+            </Link>
+            ) actually comes out of — leave it unset and the deduction falls back to whichever task someone
+            spent the most time on instead.
           </p>
         </div>
         {!currentUser && (

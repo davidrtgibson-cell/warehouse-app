@@ -41,10 +41,16 @@ type TaskMember = {
   durationMinutes: number | null;
   status: "ACTIVE" | "CLOSED";
   spillover?: Spillover;
+  // This movement's share of its employee's unpaid break, if any (native
+  // rows only — see getTaskTimeline in lib/actions/board.ts). Subtracted
+  // from the displayed minutes below so this modal's numbers can't disagree
+  // with the task card's own already-net total.
+  breakDeductionMinutes?: number;
 };
 
 function taskMemberMinutes(m: TaskMember) {
-  return m.status === "ACTIVE" ? plannedMinutesOnTask(m.startTime, m.scheduledFinish) : (m.durationMinutes ?? 0);
+  const raw = m.status === "ACTIVE" ? plannedMinutesOnTask(m.startTime, m.scheduledFinish) : (m.durationMinutes ?? 0);
+  return Math.max(0, raw - (m.breakDeductionMinutes ?? 0));
 }
 
 // Longest time-on-task first, alphabetical as a tiebreak — same ordering
@@ -70,7 +76,14 @@ function TaskMemberLine({ member }: { member: TaskMember }) {
         </div>
         <div className="text-zinc-500">{member.employeeCode}</div>
       </div>
-      <div className="whitespace-nowrap font-mono text-zinc-500">
+      <div
+        className="whitespace-nowrap font-mono text-zinc-500"
+        title={
+          member.breakDeductionMinutes
+            ? `Net of ${formatDuration(member.breakDeductionMinutes)} unpaid break`
+            : undefined
+        }
+      >
         {rangeText} · {formatDuration(taskMemberMinutes(member))}
       </div>
     </div>
@@ -151,6 +164,14 @@ export type BoardEntry = {
   // to this shift's own window, so they read like a normal entry; this is
   // purely so the board can flag "why is this person here."
   spillover?: Spillover;
+  // This person's whole-shift gross minutes and applicable unpaid-break
+  // minutes (native rows only — undefined for a spillover entry, whose
+  // break is that adjacent shift's own concern). Shown as a gross/break/net
+  // breakdown in the detail panel; NOT subtracted from this entry's own
+  // displayed startTime/scheduledFinish range, which stays the raw fact of
+  // when they were actually on this task — only card/shift totals are net.
+  shiftGrossMinutes?: number;
+  shiftBreakMinutes?: number;
 };
 
 export type BoardTaskGroup = {
@@ -162,6 +183,11 @@ export type BoardTaskGroup = {
   // the card's total. The projected part (current entries' planned minutes
   // through their scheduledFinish) is added to this on the client.
   closedMinutesThisShift: number;
+  // Total unpaid-break minutes attributed to this task this shift, summed
+  // across everyone who worked it (see allocateBreakDeduction in
+  // src/lib/break-rules.ts) — subtracted from the card's total below so a
+  // task's reported hours never include someone's unpaid break time.
+  breakDeductionMinutes: number;
 };
 
 export type AddableTask = { id: string; name: string };
@@ -467,9 +493,12 @@ export function LiveBoardGrid({
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {filteredGroups.map((group) => {
-            const totalMinutes =
+            const totalMinutes = Math.max(
+              0,
               group.closedMinutesThisShift +
-              group.entries.reduce((sum, e) => sum + plannedMinutesOnTask(e.startTime, e.scheduledFinish), 0);
+                group.entries.reduce((sum, e) => sum + plannedMinutesOnTask(e.startTime, e.scheduledFinish), 0) -
+                group.breakDeductionMinutes
+            );
             const allSelected = group.entries.every((e) => selected.has(e.dailyRosterId));
             return (
               <div
@@ -504,7 +533,15 @@ export function LiveBoardGrid({
                   <div className="flex gap-2 text-xs text-zinc-500">
                     <span>{group.entries.length} people</span>
                     <span>·</span>
-                    <span>{formatDuration(totalMinutes)} total this shift</span>
+                    <span
+                      title={
+                        group.breakDeductionMinutes > 0
+                          ? `Net of ${formatDuration(group.breakDeductionMinutes)} unpaid break`
+                          : undefined
+                      }
+                    >
+                      {formatDuration(totalMinutes)}
+                    </span>
                   </div>
                 </div>
                 <div className="max-h-64 divide-y divide-zinc-200 overflow-y-auto dark:divide-zinc-800">
@@ -582,6 +619,20 @@ export function LiveBoardGrid({
               <span className="text-zinc-500">Department</span>
               <span>{detail.entry.departmentName ?? "—"}</span>
             </div>
+            {detail.entry.shiftGrossMinutes !== undefined && (
+              <div className="mt-1 flex justify-between text-sm">
+                <span className="text-zinc-500">This shift</span>
+                <span className="font-mono text-xs">
+                  Gross {formatDuration(detail.entry.shiftGrossMinutes)}
+                  {(detail.entry.shiftBreakMinutes ?? 0) > 0 && (
+                    <>
+                      {" "}· Break −{formatDuration(detail.entry.shiftBreakMinutes!)} · Net{" "}
+                      {formatDuration(Math.max(0, detail.entry.shiftGrossMinutes - detail.entry.shiftBreakMinutes!))}
+                    </>
+                  )}
+                </span>
+              </div>
+            )}
 
             <div className="mt-3 text-xs font-medium text-zinc-500">Today&apos;s tasks</div>
             {timeline === null ? (
@@ -686,7 +737,7 @@ export function LiveBoardGrid({
                 <div className="font-semibold">{taskDetail.taskName}</div>
                 {taskTimeline !== null && (
                   <div className="text-xs text-zinc-500">
-                    {formatDuration(taskTimeline.reduce((sum, m) => sum + taskMemberMinutes(m), 0))} total this shift
+                    {formatDuration(taskTimeline.reduce((sum, m) => sum + taskMemberMinutes(m), 0))}
                   </div>
                 )}
               </div>

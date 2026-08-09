@@ -10,6 +10,7 @@ import {
   nextShiftAndDate,
   plannedWindow,
   previousShiftAndDate,
+  sydneyInstant,
   sydneyNowMinutesOfDay,
   todaySydneyDateString,
   type ShiftWindowMap,
@@ -18,6 +19,7 @@ import { DateNav } from "@/components/DateNav";
 import { ShiftFilterNav } from "@/components/ShiftFilter";
 import { LiveBoardGrid, type BoardTaskGroup } from "@/components/LiveBoardGrid";
 import { clampToWindow, elapsedMinutes, formatDuration } from "@/lib/board-time";
+import { computeEmployeeBreakAllocation, sumDeductionsByTask, type MovementForBreakAllocation } from "@/lib/break-rules";
 
 export const dynamic = "force-dynamic";
 
@@ -134,8 +136,15 @@ async function BoardContent({
   const { shift: nextShift, dateStr: nextDateStr } = nextShiftAndDate(dateStr, shift);
   const nextWorkDate = dateOnlyFromString(nextDateStr);
   const nextWindow = plannedWindow(nextDateStr, shiftWindows[nextShift].start, shiftWindows[nextShift].finish);
+  // Break deduction is computed per shift, using only this shift's own
+  // native rows — a person's OT spilling into the next shift's board is
+  // that next shift's own break concern, same as everywhere else this
+  // native-vs-spillover distinction already applies (see clampToWindow
+  // usage below).
+  const breakStart = shiftWindows[shift].breakStart;
+  const breakStartInstant = breakStart ? sydneyInstant(dateStr, breakStart[0], breakStart[1]) : null;
 
-  const [rows, addableTasks, prevRows, nextRows] = await Promise.all([
+  const [rows, addableTasks, prevRows, nextRows, breakRules] = await Promise.all([
     prisma.dailyRoster.findMany({
       where: { workDate, shift, rosterStatus: RosterStatus.PLANNED },
       include: { employee: { include: { department: true } } },
@@ -156,6 +165,7 @@ async function BoardContent({
       where: { workDate: nextWorkDate, shift: nextShift, rosterStatus: RosterStatus.PLANNED },
       include: { employee: { include: { department: true } } },
     }),
+    prisma.breakRule.findMany({ where: { isActive: true } }),
   ]);
   const prevRowById = new Map(prevRows.map((r) => [r.id, r]));
   const nextRowById = new Map(nextRows.map((r) => [r.id, r]));
@@ -176,7 +186,7 @@ async function BoardContent({
       // shift's own finish.
       prisma.taskMovement.findMany({
         where: { status: MovementStatus.CLOSED, dailyRoster: { workDate, shift } },
-        select: { taskId: true, startTime: true, actualFinish: true },
+        select: { id: true, dailyRosterId: true, taskId: true, startTime: true, actualFinish: true },
       }),
       // Previous shift's movements still running past *their own* shift's
       // window — i.e. genuinely spilling into this one. The scheduledFinish
@@ -234,6 +244,46 @@ async function BoardContent({
     closedMinutesShiftTotal += minutes;
   }
 
+  // Unpaid break deduction — native rows only (see comment above
+  // breakStartInstant). Built from the same closed/active movements already
+  // fetched, clamped to this shift's own window and grouped per employee,
+  // so each person's own gross hours decide whether a break rule applies at
+  // all before working out which movement(s) it comes off. Same
+  // computeEmployeeBreakAllocation used by getTaskTimeline's per-task
+  // detail modal and by reporting, so none of the three can disagree.
+  const nativeMovementsByRosterId = new Map<string, MovementForBreakAllocation[]>();
+  function addNativeMovement(id: string, rosterId: string, taskId: string, start: Date, finish: Date) {
+    const clamped = clampToWindow(start, finish, thisWindow.plannedStart, thisWindow.plannedFinish);
+    if (!clamped) return;
+    const list = nativeMovementsByRosterId.get(rosterId) ?? [];
+    list.push({ id, taskId, startTime: clamped.start, effectiveFinish: clamped.finish });
+    nativeMovementsByRosterId.set(rosterId, list);
+  }
+  for (const m of closedMovements) addNativeMovement(m.id, m.dailyRosterId, m.taskId, m.startTime, m.actualFinish!);
+  for (const m of activeMovements) addNativeMovement(m.id, m.dailyRosterId, m.taskId, m.startTime, m.scheduledFinish);
+
+  const breakRuleTiers = breakRules.map((r) => ({
+    isActive: r.isActive,
+    minHoursWorked: Number(r.minHoursWorked),
+    unpaidMinutes: r.unpaidMinutes,
+  }));
+  const breakDeductionByTask = new Map<string, number>();
+  const breakInfoByRosterId = new Map<string, { grossMinutes: number; breakMinutes: number }>();
+  for (const [rosterId, movements] of nativeMovementsByRosterId) {
+    const { grossMinutes, breakMinutes, perMovement } = computeEmployeeBreakAllocation(
+      movements,
+      breakStartInstant,
+      breakRuleTiers
+    );
+    breakInfoByRosterId.set(rosterId, { grossMinutes, breakMinutes });
+    if (breakMinutes <= 0) continue;
+    const perTask = sumDeductionsByTask(movements, perMovement);
+    for (const [taskId, minutes] of perTask) {
+      breakDeductionByTask.set(taskId, (breakDeductionByTask.get(taskId) ?? 0) + minutes);
+    }
+  }
+  const totalBreakDeductionMinutes = Array.from(breakDeductionByTask.values()).reduce((a, b) => a + b, 0);
+
   const byTask = new Map<string, { taskName: string; sortOrder: number; group: BoardTaskGroup }>();
   let notYetLive = 0;
   let activeMinutesTotal = 0;
@@ -247,6 +297,7 @@ async function BoardContent({
         taskName,
         entries: [],
         closedMinutesThisShift: closedMinutesMap.get(taskId) ?? 0,
+        breakDeductionMinutes: breakDeductionByTask.get(taskId) ?? 0,
       },
     };
     byTask.set(taskId, bucket);
@@ -271,6 +322,7 @@ async function BoardContent({
     );
     if (!clamped) continue;
     const bucket = bucketFor(movement.taskId, movement.task.name, movement.task.sortOrder);
+    const breakInfo = breakInfoByRosterId.get(row.id);
     bucket.group.entries.push({
       dailyRosterId: row.id,
       firstName: row.employee.firstName,
@@ -279,6 +331,8 @@ async function BoardContent({
       departmentName: row.employee.department?.name ?? null,
       startTime: clamped.start,
       scheduledFinish: clamped.finish,
+      shiftGrossMinutes: breakInfo?.grossMinutes,
+      shiftBreakMinutes: breakInfo?.breakMinutes,
     });
     activeMinutesTotal += elapsedMinutes(clamped.start, clamped.finish);
   }
@@ -341,7 +395,7 @@ async function BoardContent({
     activeMinutesTotal += elapsedMinutes(clamped.start, clamped.finish);
   }
 
-  const shiftTotalMinutes = closedMinutesShiftTotal + activeMinutesTotal;
+  const shiftTotalMinutes = Math.max(0, closedMinutesShiftTotal + activeMinutesTotal - totalBreakDeductionMinutes);
 
   const taskGroups = Array.from(byTask.values())
     .sort((a, b) => a.sortOrder - b.sortOrder)

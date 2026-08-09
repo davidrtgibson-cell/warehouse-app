@@ -13,8 +13,10 @@ import {
   plannedWindow,
   previousShiftAndDate,
   shiftAwareInstant,
+  sydneyInstant,
 } from "@/lib/schedule";
 import { clampToWindow, elapsedMinutes } from "@/lib/board-time";
+import { computeEmployeeBreakAllocation, type MovementForBreakAllocation } from "@/lib/break-rules";
 
 // Called directly from the live board's client component (not a <form
 // action>), so it takes plain arguments. Closes each row's current active
@@ -209,7 +211,12 @@ export async function getMovementTimeline(dailyRosterId: string) {
 // Mirrors BoardContent's native+spillover, clamp-to-window construction (see
 // src/app/page.tsx) rather than just the viewed shift's own movements — the
 // card total this drills into already includes OT spilling in from the
-// previous shift, so this has to match or the two totals disagree.
+// previous shift, so this has to match or the two totals disagree. Same
+// reasoning applies to the unpaid break deduction (see
+// src/lib/break-rules.ts) — native rows only, computed from each of those
+// employees' *whole* shift (every task, not just this one), so a task-card
+// total and this drill-down can never show different numbers for the same
+// people.
 export async function getTaskTimeline(taskId: string, workDateStr: string, shift: Shift) {
   const shiftWindows = await getShiftWindows();
   const thisWindow = plannedWindow(workDateStr, shiftWindows[shift].start, shiftWindows[shift].finish);
@@ -217,8 +224,10 @@ export async function getTaskTimeline(taskId: string, workDateStr: string, shift
   const prevWindow = plannedWindow(prevDateStr, shiftWindows[prevShift].start, shiftWindows[prevShift].finish);
   const { shift: nextShift, dateStr: nextDateStr } = nextShiftAndDate(workDateStr, shift);
   const nextWindow = plannedWindow(nextDateStr, shiftWindows[nextShift].start, shiftWindows[nextShift].finish);
+  const breakStartHM = shiftWindows[shift].breakStart;
+  const breakStartInstant = breakStartHM ? sydneyInstant(workDateStr, breakStartHM[0], breakStartHM[1]) : null;
 
-  const [nativeMovements, prevSpilloverMovements, nextSpilloverMovements] = await Promise.all([
+  const [nativeMovements, prevSpilloverMovements, nextSpilloverMovements, breakRules] = await Promise.all([
     prisma.taskMovement.findMany({
       where: { taskId, dailyRoster: { workDate: dateOnlyFromString(workDateStr), shift } },
       include: { employee: true },
@@ -247,7 +256,47 @@ export async function getTaskTimeline(taskId: string, workDateStr: string, shift
       },
       include: { employee: true, dailyRoster: { select: { shiftExtended: true } } },
     }),
+    prisma.breakRule.findMany({ where: { isActive: true } }),
   ]);
+
+  // Each native row's WHOLE shift (every task, not just this one) is needed
+  // to work out their break eligibility and which movement(s) it comes off
+  // — the same computation BoardContent does, just re-run here rather than
+  // shared across requests (server actions don't share in-memory state).
+  const nativeRosterIds = Array.from(new Set(nativeMovements.map((m) => m.dailyRosterId)));
+  const wholeShiftMovements =
+    nativeRosterIds.length > 0
+      ? await prisma.taskMovement.findMany({ where: { dailyRosterId: { in: nativeRosterIds } } })
+      : [];
+  const wholeShiftByRosterId = new Map<string, typeof wholeShiftMovements>();
+  for (const m of wholeShiftMovements) {
+    const list = wholeShiftByRosterId.get(m.dailyRosterId) ?? [];
+    list.push(m);
+    wholeShiftByRosterId.set(m.dailyRosterId, list);
+  }
+
+  const breakRuleTiers = breakRules.map((r) => ({
+    isActive: r.isActive,
+    minHoursWorked: Number(r.minHoursWorked),
+    unpaidMinutes: r.unpaidMinutes,
+  }));
+
+  // Global per-movement deduction map, merged across every native employee
+  // involved — movement ids are unique, so union-ing per-employee maps is
+  // safe.
+  const deductionByMovementId = new Map<string, number>();
+  for (const rosterId of nativeRosterIds) {
+    const shiftMovements = wholeShiftByRosterId.get(rosterId) ?? [];
+    const forBreak: MovementForBreakAllocation[] = [];
+    for (const m of shiftMovements) {
+      const effectiveFinish = m.actualFinish ?? m.scheduledFinish;
+      const clamped = clampToWindow(m.startTime, effectiveFinish, thisWindow.plannedStart, thisWindow.plannedFinish);
+      if (!clamped) continue;
+      forBreak.push({ id: m.id, taskId: m.taskId, startTime: clamped.start, effectiveFinish: clamped.finish });
+    }
+    const { perMovement } = computeEmployeeBreakAllocation(forBreak, breakStartInstant, breakRuleTiers);
+    for (const [id, minutes] of perMovement) deductionByMovementId.set(id, minutes);
+  }
 
   function toRow(m: (typeof nativeMovements)[number], spillover?: { direction: "from" | "into"; shift: Shift }) {
     const effectiveFinish = m.status === MovementStatus.CLOSED ? m.actualFinish! : m.scheduledFinish;
@@ -266,6 +315,9 @@ export async function getTaskTimeline(taskId: string, workDateStr: string, shift
       durationMinutes: isClosed ? elapsedMinutes(clamped.start, clamped.finish) : null,
       status: m.status,
       spillover,
+      // Native rows only (see doc comment above) — undefined for spillover,
+      // whose break is that adjacent shift's own concern.
+      breakDeductionMinutes: spillover ? undefined : deductionByMovementId.get(m.id),
     };
   }
 

@@ -78,7 +78,10 @@ export function timeValueFromHoursMinutes(hours: number, minutes: number): Date 
   return new Date(Date.UTC(1970, 0, 1, hours, minutes, 0));
 }
 
-export type ShiftWindowMap = Record<Shift, { start: [number, number]; finish: [number, number] }>;
+export type ShiftWindowMap = Record<
+  Shift,
+  { start: [number, number]; finish: [number, number]; breakStart: [number, number] | null }
+>;
 
 const SHIFT_ORDER: Shift[] = [Shift.AM, Shift.PM, Shift.NIGHT];
 
@@ -97,7 +100,12 @@ export async function getShiftWindows(): Promise<ShiftWindowMap> {
     if (!row) throw new Error(`Missing ShiftWindow row for ${shift} — check migration/seed`);
     const start = hoursMinutesFromTimeValue(row.startTime);
     const finish = hoursMinutesFromTimeValue(row.finishTime);
-    map[shift] = { start: [start.hours, start.minutes], finish: [finish.hours, finish.minutes] };
+    const breakStart = row.breakStartTime ? hoursMinutesFromTimeValue(row.breakStartTime) : null;
+    map[shift] = {
+      start: [start.hours, start.minutes],
+      finish: [finish.hours, finish.minutes],
+      breakStart: breakStart ? [breakStart.hours, breakStart.minutes] : null,
+    };
   }
   return map;
 }

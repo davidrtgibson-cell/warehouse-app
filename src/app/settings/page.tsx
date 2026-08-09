@@ -2,20 +2,24 @@ import Link from "next/link";
 
 export const dynamic = "force-dynamic";
 
-// Scoped to shift hours only for now — structured so future settings
-// sections (Tasks, Departments, Break rules — already schema-ready per the
-// isActive/sortOrder convention, but with no UI yet) can be added as more
-// links here without a URL restructure.
+// Structured so future settings sections (Tasks, Departments — already
+// schema-ready per the isActive/sortOrder convention, but with no UI yet)
+// can be added as more links here without a URL restructure.
 const SETTINGS_SECTIONS = [
   {
     href: "/settings/shifts",
     label: "Shift hours",
-    description: "AM/PM/NIGHT start & finish times used across rostering.",
+    description: "AM/PM/NIGHT start & finish times, and each shift's scheduled break time.",
   },
   {
     href: "/settings/standard-roster",
     label: "Standard roster",
     description: "The recurring weekly work pattern each employee is rostered against.",
+  },
+  {
+    href: "/settings/break-rules",
+    label: "Break rules",
+    description: "Unpaid meal-break deductions by hours worked — editable per your EA/business rules.",
   },
 ];
 
