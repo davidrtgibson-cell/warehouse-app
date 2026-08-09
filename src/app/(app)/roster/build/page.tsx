@@ -237,13 +237,6 @@ export default async function BuildRosterPage(props: PageProps<"/roster/build">)
           </div>
         </header>
 
-        {!currentUser && (
-          <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
-            Select an acting user from the &quot;Acting as&quot; picker above before generating, marking
-            absences, editing, or adding to the roster.
-          </div>
-        )}
-
         <section className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
           <Stat label="Rostered" value={rows.length} />
           <Stat label="AM" value={byShift.get(Shift.AM)?.length ?? 0} />
@@ -253,17 +246,20 @@ export default async function BuildRosterPage(props: PageProps<"/roster/build">)
           <Stat label="Casual/manual add" value={manualCount} />
         </section>
 
-        <section className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h2 className="text-sm font-semibold">Generate from Standard Roster</h2>
-              <p className="mt-1 text-xs text-zinc-500">
-                {eligibleStandardRosterCount} standard-roster entries match this date
-                {generatedFromStandardCount > 0 && `, ${generatedFromStandardCount} already generated`}.
-                Already-generated rows are skipped — safe to run again.
-              </p>
-            </div>
-            <form action={generateAction}>
+        {/* Generate/Finalise/Headcount side by side rather than stacked full-
+            width — the three least-often-needed-after-setup actions,
+            grouped so they take one screen's worth of height instead of
+            three (BACKLOG.md Tier 3 #1: "functionality good, layout
+            maybe not" as this page grew across several sessions). */}
+        <section className="grid grid-cols-1 gap-4 lg:grid-cols-3 lg:items-start">
+          <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+            <h2 className="text-sm font-semibold">Generate from Standard Roster</h2>
+            <p className="mt-1 text-xs text-zinc-500">
+              {eligibleStandardRosterCount} standard-roster entries match this date
+              {generatedFromStandardCount > 0 && `, ${generatedFromStandardCount} already generated`}.
+              Already-generated rows are skipped — safe to run again.
+            </p>
+            <form action={generateAction} className="mt-3">
               <button
                 type="submit"
                 disabled={!currentUser || pendingGenerateCount === 0}
@@ -273,35 +269,23 @@ export default async function BuildRosterPage(props: PageProps<"/roster/build">)
               </button>
             </form>
           </div>
-        </section>
 
-        {finalizeShift ? (
-          <section className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <h2 className="text-sm font-semibold">Finalise roster — {finalizeShift} shift</h2>
-                {finalization ? (
-                  <p className="mt-1 text-xs text-zinc-500">
-                    Finalised {fmtTimeSydney(finalization.finalizedAt)} by {finalization.finalizedByUser.name}.
-                    {pendingFinalizeCount > 0 &&
-                      ` ${pendingFinalizeCount} added since — re-finalise to bring them live.`}
-                  </p>
-                ) : (
-                  <p className="mt-1 text-xs text-zinc-500">
-                    Bulk-opens a task movement for everyone on this shift, starting at their planned time —
-                    brings it onto the Live Board. The roster stays editable after.
-                  </p>
-                )}
-              </div>
-              <div className="flex items-center gap-2">
-                {finalization && (
-                  <Link
-                    href={`/roster/print?date=${dateStr}&shift=${finalizeShift}`}
-                    className="rounded border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-900"
-                  >
-                    Print sheet →
-                  </Link>
-                )}
+          {finalizeShift ? (
+            <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+              <h2 className="text-sm font-semibold">Finalise roster — {finalizeShift} shift</h2>
+              {finalization ? (
+                <p className="mt-1 text-xs text-zinc-500">
+                  Finalised {fmtTimeSydney(finalization.finalizedAt)} by {finalization.finalizedByUser.name}.
+                  {pendingFinalizeCount > 0 &&
+                    ` ${pendingFinalizeCount} added since — re-finalise to bring them live.`}
+                </p>
+              ) : (
+                <p className="mt-1 text-xs text-zinc-500">
+                  Bulk-opens a task movement for everyone on this shift, starting at their planned time —
+                  brings it onto the Live Board. The roster stays editable after.
+                </p>
+              )}
+              <div className="mt-3 flex flex-wrap items-center gap-2">
                 <form action={finalizeAction}>
                   <button
                     type="submit"
@@ -315,52 +299,72 @@ export default async function BuildRosterPage(props: PageProps<"/roster/build">)
                       : `Finalise Roster (${pendingFinalizeCount})`}
                   </button>
                 </form>
+                {finalization && (
+                  <Link
+                    href={`/roster/print?date=${dateStr}&shift=${finalizeShift}`}
+                    className="rounded border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-900"
+                  >
+                    Print sheet →
+                  </Link>
+                )}
               </div>
             </div>
-          </section>
-        ) : (
-          <div className="rounded-lg border border-dashed border-zinc-300 p-4 text-center text-sm text-zinc-500 dark:border-zinc-700">
-            Select a specific shift above to finalise it and open the printable sheet.
-          </div>
-        )}
-
-        <section className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
-          <h2 className="mb-2 text-sm font-semibold text-zinc-500">
-            Headcount by task {shiftFilter !== "ALL" && `— ${shiftFilter} shift`}
-          </h2>
-          {headcount.length === 0 ? (
-            <p className="text-sm text-zinc-500">No one currently planned{shiftFilter !== "ALL" && " on this shift"}.</p>
           ) : (
-            <div className="flex flex-wrap gap-2">
-              {headcount.map((h) => (
-                <span
-                  key={h.name}
-                  className="rounded-full border border-zinc-300 px-3 py-1 text-xs dark:border-zinc-700"
-                >
-                  {h.name} <span className="font-mono text-zinc-500">· {h.count}</span>
-                </span>
-              ))}
+            <div className="flex items-center justify-center rounded-lg border border-dashed border-zinc-300 p-4 text-center text-sm text-zinc-500 dark:border-zinc-700">
+              Select a specific shift above to finalise it and open the printable sheet.
             </div>
           )}
+
+          <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+            <h2 className="mb-2 text-sm font-semibold text-zinc-500">
+              Headcount by task {shiftFilter !== "ALL" && `— ${shiftFilter} shift`}
+            </h2>
+            {headcount.length === 0 ? (
+              <p className="text-sm text-zinc-500">No one currently planned{shiftFilter !== "ALL" && " on this shift"}.</p>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {headcount.map((h) => (
+                  <span
+                    key={h.name}
+                    className="rounded-full border border-zinc-300 px-3 py-1 text-xs dark:border-zinc-700"
+                  >
+                    {h.name} <span className="font-mono text-zinc-500">· {h.count}</span>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
         </section>
 
-        <section>
-          <h2 className="mb-2 text-sm font-semibold text-zinc-500">
-            Add to roster (casual / agency / no standard-roster coverage)
-          </h2>
-          <p className="mb-2 text-xs text-zinc-500">
-            Every active employee not already on this date&apos;s roster — including permanent/part-time
-            staff on a day with no Standard Roster coverage (e.g. weekend overtime shifts). Use &quot;Custom
-            hours&quot; below for a non-conventional window, like a 10am–6pm mid-shift.
-          </p>
-          <CasualPoolPanel
-            dateStr={dateStr}
-            employees={poolEmployees}
-            tasks={addableTaskOptions}
-            disabled={!currentUser}
-            defaultShiftFilter={shiftFilter === "ALL" ? undefined : shiftFilter}
-          />
-        </section>
+        {/* Collapsed by default — a secondary/occasional action (most rows
+            come from Generate above), and its own search box + scrollable
+            employee table was previously the single biggest thing standing
+            between opening this page and reaching the actual roster below. */}
+        <details className="group rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 p-4">
+            <div>
+              <h2 className="inline text-sm font-semibold text-zinc-500">
+                Add to roster (casual / agency / no standard-roster coverage)
+              </h2>
+              <span className="ml-2 text-xs text-zinc-400">{poolEmployees.length} in pool</span>
+            </div>
+            <span className="text-zinc-400 transition-transform group-open:rotate-180">▾</span>
+          </summary>
+          <div className="border-t border-zinc-200 p-4 dark:border-zinc-800">
+            <p className="mb-2 text-xs text-zinc-500">
+              Every active employee not already on this date&apos;s roster — including permanent/part-time
+              staff on a day with no Standard Roster coverage (e.g. weekend overtime shifts). Use &quot;Custom
+              hours&quot; below for a non-conventional window, like a 10am–6pm mid-shift.
+            </p>
+            <CasualPoolPanel
+              dateStr={dateStr}
+              employees={poolEmployees}
+              tasks={addableTaskOptions}
+              disabled={!currentUser}
+              defaultShiftFilter={shiftFilter === "ALL" ? undefined : shiftFilter}
+            />
+          </div>
+        </details>
 
         <section className="flex flex-wrap items-center gap-2 rounded-lg border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-950">
           <RosterSearchBox />
