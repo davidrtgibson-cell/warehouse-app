@@ -1,4 +1,4 @@
-import type { Prisma } from "@/generated/prisma/client";
+import { Prisma } from "@/generated/prisma/client";
 import { MovementStatus } from "@/generated/prisma/enums";
 
 type TxClient = Prisma.TransactionClient;
@@ -38,17 +38,31 @@ export async function openMovement(
   action: string,
   startTime: Date = new Date()
 ) {
-  await tx.taskMovement.create({
-    data: {
-      employeeId: dailyRoster.employeeId,
-      dailyRosterId: dailyRoster.id,
-      taskId: task.id,
-      startTime,
-      scheduledFinish: dailyRoster.approvedFinish,
-      status: MovementStatus.ACTIVE,
-      processedByUserId: actingUserId,
-    },
-  });
+  try {
+    await tx.taskMovement.create({
+      data: {
+        employeeId: dailyRoster.employeeId,
+        dailyRosterId: dailyRoster.id,
+        taskId: task.id,
+        startTime,
+        scheduledFinish: dailyRoster.approvedFinish,
+        status: MovementStatus.ACTIVE,
+        processedByUserId: actingUserId,
+      },
+    });
+  } catch (e) {
+    // Backstop for the task_movements_one_active_per_daily_roster partial
+    // unique index (see its migration) — every call site here already
+    // checks for an existing ACTIVE movement before calling this, so
+    // reaching the constraint means two requests raced past that check at
+    // nearly the same time (e.g. two leaders acting on the same person).
+    // Surface something a leader can actually act on instead of the raw
+    // Prisma error.
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+      throw new Error("This person already has an active task movement — someone else likely just moved them. Refresh and try again.");
+    }
+    throw e;
+  }
 
   await tx.auditLog.create({
     data: {

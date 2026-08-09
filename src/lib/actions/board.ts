@@ -48,28 +48,35 @@ export async function moveSelectedToTask(dailyRosterIds: string[], taskId: strin
   const activeByRosterId = new Map(activeMovements.map((m) => [m.dailyRosterId, m]));
   const shiftWindows = atTimeStr ? await getShiftWindows() : null;
 
+  // One transaction for the whole selection, not one per row — a bulk move
+  // must be atomic (all rows or none), per the brief's concurrency
+  // requirements. A large selection can touch a lot of rows, so the
+  // timeout is raised well past Prisma's 5s default.
   let moved = 0;
-  for (const dailyRoster of dailyRosters) {
-    const active = activeByRosterId.get(dailyRoster.id);
-    if (!active || active.taskId === task.id) continue;
+  await prisma.$transaction(
+    async (tx) => {
+      for (const dailyRoster of dailyRosters) {
+        const active = activeByRosterId.get(dailyRoster.id);
+        if (!active || active.taskId === task.id) continue;
 
-    const at = atTimeStr
-      ? shiftAwareInstant(
-          shiftWindows!,
-          toDateOnlyString(dailyRoster.workDate),
-          dailyRoster.shift,
-          ...parseTimeString(atTimeStr)
-        )
-      : new Date();
-    if (at.getTime() > Date.now()) throw new Error("Move time can't be in the future");
-    if (at.getTime() < active.startTime.getTime()) continue;
+        const at = atTimeStr
+          ? shiftAwareInstant(
+              shiftWindows!,
+              toDateOnlyString(dailyRoster.workDate),
+              dailyRoster.shift,
+              ...parseTimeString(atTimeStr)
+            )
+          : new Date();
+        if (at.getTime() > Date.now()) throw new Error("Move time can't be in the future");
+        if (at.getTime() < active.startTime.getTime()) continue;
 
-    await prisma.$transaction(async (tx) => {
-      await closeActiveMovement(tx, dailyRoster.id, at);
-      await openMovement(tx, dailyRoster, task, actingUser.id, "MOVE_TASK", at);
-    });
-    moved++;
-  }
+        await closeActiveMovement(tx, dailyRoster.id, at);
+        await openMovement(tx, dailyRoster, task, actingUser.id, "MOVE_TASK", at);
+        moved++;
+      }
+    },
+    { timeout: 30_000 }
+  );
 
   refresh();
   return { moved };
@@ -118,48 +125,52 @@ export async function extendShiftAction(
   const activeByRosterId = new Map(activeMovements.map((m) => [m.dailyRosterId, m]));
   const shiftWindows = await getShiftWindows();
 
+  // One transaction for the whole selection — see moveSelectedToTask.
   let extended = 0;
-  for (const dailyRoster of dailyRosters) {
-    const active = activeByRosterId.get(dailyRoster.id);
-    if (!active) continue;
+  await prisma.$transaction(
+    async (tx) => {
+      for (const dailyRoster of dailyRosters) {
+        const active = activeByRosterId.get(dailyRoster.id);
+        if (!active) continue;
 
-    const newFinish = shiftAwareInstant(
-      shiftWindows,
-      toDateOnlyString(dailyRoster.workDate),
-      dailyRoster.shift,
-      ...parseTimeString(newFinishTimeStr)
-    );
-    if (newFinish.getTime() <= dailyRoster.approvedFinish.getTime()) continue;
-    if (newFinish.getTime() <= active.startTime.getTime()) continue;
+        const newFinish = shiftAwareInstant(
+          shiftWindows,
+          toDateOnlyString(dailyRoster.workDate),
+          dailyRoster.shift,
+          ...parseTimeString(newFinishTimeStr)
+        );
+        if (newFinish.getTime() <= dailyRoster.approvedFinish.getTime()) continue;
+        if (newFinish.getTime() <= active.startTime.getTime()) continue;
 
-    await prisma.$transaction(async (tx) => {
-      await tx.dailyRoster.update({
-        where: { id: dailyRoster.id },
-        data: { approvedFinish: newFinish, shiftExtended: true, extensionNote: note?.trim() || null },
-      });
-
-      if (task && task.id !== active.taskId) {
-        await closeActiveMovement(tx, dailyRoster.id);
-        await openMovement(tx, { ...dailyRoster, approvedFinish: newFinish }, task, actingUser.id, "EXTEND_SHIFT_MOVE_TASK");
-      } else {
-        await tx.taskMovement.updateMany({
-          where: { dailyRosterId: dailyRoster.id, status: MovementStatus.ACTIVE },
-          data: { scheduledFinish: newFinish },
+        await tx.dailyRoster.update({
+          where: { id: dailyRoster.id },
+          data: { approvedFinish: newFinish, shiftExtended: true, extensionNote: note?.trim() || null },
         });
-      }
 
-      await tx.auditLog.create({
-        data: {
-          entityType: "DailyRoster",
-          entityId: dailyRoster.id,
-          action: "EXTEND_SHIFT",
-          changes: { newFinish: newFinishTimeStr, taskId: task?.id ?? null, note: note ?? null },
-          changedByUserId: actingUser.id,
-        },
-      });
-    });
-    extended++;
-  }
+        if (task && task.id !== active.taskId) {
+          await closeActiveMovement(tx, dailyRoster.id);
+          await openMovement(tx, { ...dailyRoster, approvedFinish: newFinish }, task, actingUser.id, "EXTEND_SHIFT_MOVE_TASK");
+        } else {
+          await tx.taskMovement.updateMany({
+            where: { dailyRosterId: dailyRoster.id, status: MovementStatus.ACTIVE },
+            data: { scheduledFinish: newFinish },
+          });
+        }
+
+        await tx.auditLog.create({
+          data: {
+            entityType: "DailyRoster",
+            entityId: dailyRoster.id,
+            action: "EXTEND_SHIFT",
+            changes: { newFinish: newFinishTimeStr, taskId: task?.id ?? null, note: note ?? null },
+            changedByUserId: actingUser.id,
+          },
+        });
+        extended++;
+      }
+    },
+    { timeout: 30_000 }
+  );
 
   refresh();
   return { extended };

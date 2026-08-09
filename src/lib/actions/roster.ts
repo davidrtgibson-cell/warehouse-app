@@ -125,19 +125,23 @@ export async function finalizeRosterAction(dateStr: string, shift: Shift) {
   });
   const taskById = new Map(tasks.map((t) => [t.id, t]));
 
-  await prisma.$transaction(async (tx) => {
-    for (const row of toStart) {
-      const task = taskById.get(row.defaultTaskId);
-      if (!task) continue;
-      await openMovement(tx, row, task, actingUser.id, "FINALIZE_ROSTER", row.plannedStart);
-    }
+  await prisma.$transaction(
+    async (tx) => {
+      for (const row of toStart) {
+        const task = taskById.get(row.defaultTaskId);
+        if (!task) continue;
+        await openMovement(tx, row, task, actingUser.id, "FINALIZE_ROSTER", row.plannedStart);
+      }
 
-    await tx.rosterFinalization.upsert({
-      where: { workDate_shift: { workDate, shift } },
-      create: { workDate, shift, finalizedByUserId: actingUser.id },
-      update: { finalizedAt: new Date(), finalizedByUserId: actingUser.id },
-    });
-  });
+      await tx.rosterFinalization.upsert({
+        where: { workDate_shift: { workDate, shift } },
+        create: { workDate, shift, finalizedByUserId: actingUser.id },
+        update: { finalizedAt: new Date(), finalizedByUserId: actingUser.id },
+      });
+    },
+    // A whole shift can be 100+ rows — well past Prisma's 5s default.
+    { timeout: 30_000 }
+  );
 
   refresh();
   return { started: toStart.length };
@@ -218,92 +222,99 @@ export async function bulkChangeStartTimeAction(
   const reason = note?.trim() ? `${reasonPrefix}: ${note.trim()}` : reasonPrefix;
 
   let changed = 0;
-  await prisma.$transaction(async (tx) => {
-    for (const dailyRoster of dailyRosters) {
-      const active = activeByRosterId.get(dailyRoster.id);
-      // A movement existing isn't the same as it having genuinely started —
-      // Finalise Roster can be run ahead of a shift's own start (or the
-      // whole workDate can be a future date being planned in advance), in
-      // which case the movement it opened still has a startTime that
-      // hasn't arrived yet. Only treat this as an already-happened "fact"
-      // (no drag, can't move into the future, can't overlap) once that
-      // startTime has actually passed — otherwise it's still just the plan,
-      // wearing a movement row.
-      const isLiveFact = !!active && active.startTime.getTime() <= Date.now();
+  await prisma.$transaction(
+    async (tx) => {
+      for (const dailyRoster of dailyRosters) {
+        const active = activeByRosterId.get(dailyRoster.id);
+        // A movement existing isn't the same as it having genuinely started —
+        // Finalise Roster can be run ahead of a shift's own start (or the
+        // whole workDate can be a future date being planned in advance), in
+        // which case the movement it opened still has a startTime that
+        // hasn't arrived yet. Only treat this as an already-happened "fact"
+        // (no drag, can't move into the future, can't overlap) once that
+        // startTime has actually passed — otherwise it's still just the plan,
+        // wearing a movement row.
+        const isLiveFact = !!active && active.startTime.getTime() <= Date.now();
 
-      const dateStr = toDateOnlyString(dailyRoster.workDate);
-      const currentStart = active ? active.startTime : dailyRoster.plannedStart;
-      const currentFinish = active ? active.scheduledFinish : dailyRoster.plannedFinish;
-      const drag = !isLiveFact && mode === "SHIFT_CHANGE";
+        const dateStr = toDateOnlyString(dailyRoster.workDate);
+        const currentStart = active ? active.startTime : dailyRoster.plannedStart;
+        const currentFinish = active ? active.scheduledFinish : dailyRoster.plannedFinish;
+        const drag = !isLiveFact && mode === "SHIFT_CHANGE";
 
-      let newStart: Date;
-      let newFinish: Date;
-      if (start && finish) {
-        newStart = sydneyInstant(dateStr, start[0], start[1]);
-        newFinish = plannedWindow(dateStr, start, finish).plannedFinish;
-      } else if (start) {
-        newStart = sydneyInstant(dateStr, start[0], start[1]);
-        newFinish = drag ? new Date(currentFinish.getTime() + (newStart.getTime() - currentStart.getTime())) : currentFinish;
-      } else {
-        // Same forward-midnight-crossing resolution Extend Shift already
-        // uses, so a NIGHT finish typed as an early-morning hour rolls to
-        // the next day here exactly like it does there.
-        newFinish = shiftAwareInstant(shiftWindows!, dateStr, dailyRoster.shift, finish![0], finish![1]);
-        newStart = drag ? new Date(currentStart.getTime() + (newFinish.getTime() - currentFinish.getTime())) : currentStart;
-      }
-      if (newFinish.getTime() <= newStart.getTime()) continue;
+        let newStart: Date;
+        let newFinish: Date;
+        if (start && finish) {
+          newStart = sydneyInstant(dateStr, start[0], start[1]);
+          newFinish = plannedWindow(dateStr, start, finish).plannedFinish;
+        } else if (start) {
+          newStart = sydneyInstant(dateStr, start[0], start[1]);
+          newFinish = drag
+            ? new Date(currentFinish.getTime() + (newStart.getTime() - currentStart.getTime()))
+            : currentFinish;
+        } else {
+          // Same forward-midnight-crossing resolution Extend Shift already
+          // uses, so a NIGHT finish typed as an early-morning hour rolls to
+          // the next day here exactly like it does there.
+          newFinish = shiftAwareInstant(shiftWindows!, dateStr, dailyRoster.shift, finish![0], finish![1]);
+          newStart = drag
+            ? new Date(currentStart.getTime() + (newFinish.getTime() - currentFinish.getTime()))
+            : currentStart;
+        }
+        if (newFinish.getTime() <= newStart.getTime()) continue;
 
-      if (isLiveFact) {
-        if (newStart.getTime() > Date.now()) continue; // can't retroactively start something in the future
-        const overlapping = await tx.taskMovement.findFirst({
-          where: { dailyRosterId: dailyRoster.id, id: { not: active!.id }, actualFinish: { gt: newStart } },
-        });
-        if (overlapping) continue;
-      }
+        if (isLiveFact) {
+          if (newStart.getTime() > Date.now()) continue; // can't retroactively start something in the future
+          const overlapping = await tx.taskMovement.findFirst({
+            where: { dailyRosterId: dailyRoster.id, id: { not: active!.id }, actualFinish: { gt: newStart } },
+          });
+          if (overlapping) continue;
+        }
 
-      if (active) {
-        // A movement already exists (finalised, whether or not it's
-        // actually started yet) — write the correction through it, since
-        // that's what the board reads once one's been opened.
-        await tx.taskMovement.update({
-          where: { id: active.id },
-          data: { startTime: newStart, scheduledFinish: newFinish },
-        });
-        await tx.dailyRoster.update({
-          where: { id: dailyRoster.id },
-          data: { approvedFinish: newFinish, overrideReason: reason, shiftExtended: mode === "OVERTIME" },
-        });
-      } else {
-        await tx.dailyRoster.update({
-          where: { id: dailyRoster.id },
+        if (active) {
+          // A movement already exists (finalised, whether or not it's
+          // actually started yet) — write the correction through it, since
+          // that's what the board reads once one's been opened.
+          await tx.taskMovement.update({
+            where: { id: active.id },
+            data: { startTime: newStart, scheduledFinish: newFinish },
+          });
+          await tx.dailyRoster.update({
+            where: { id: dailyRoster.id },
+            data: { approvedFinish: newFinish, overrideReason: reason, shiftExtended: mode === "OVERTIME" },
+          });
+        } else {
+          await tx.dailyRoster.update({
+            where: { id: dailyRoster.id },
+            data: {
+              plannedStart: newStart,
+              plannedFinish: newFinish,
+              approvedFinish: newFinish,
+              overrideReason: reason,
+              shiftExtended: mode === "OVERTIME",
+            },
+          });
+        }
+
+        await tx.auditLog.create({
           data: {
-            plannedStart: newStart,
-            plannedFinish: newFinish,
-            approvedFinish: newFinish,
-            overrideReason: reason,
-            shiftExtended: mode === "OVERTIME",
+            entityType: active ? "TaskMovement" : "DailyRoster",
+            entityId: active ? active.id : dailyRoster.id,
+            action: "BULK_CHANGE_START_TIME",
+            changes: {
+              newStart: newStartTimeStr ?? null,
+              newFinish: newFinishTimeStr ?? null,
+              mode,
+              note: note ?? null,
+              wasLiveFact: isLiveFact,
+            },
+            changedByUserId: actingUser.id,
           },
         });
+        changed++;
       }
-
-      await tx.auditLog.create({
-        data: {
-          entityType: active ? "TaskMovement" : "DailyRoster",
-          entityId: active ? active.id : dailyRoster.id,
-          action: "BULK_CHANGE_START_TIME",
-          changes: {
-            newStart: newStartTimeStr ?? null,
-            newFinish: newFinishTimeStr ?? null,
-            mode,
-            note: note ?? null,
-            wasLiveFact: isLiveFact,
-          },
-          changedByUserId: actingUser.id,
-        },
-      });
-      changed++;
-    }
-  });
+    },
+    { timeout: 30_000 }
+  );
 
   refresh();
   return { changed, skipped: dailyRosterIds.length - changed };
@@ -402,9 +413,16 @@ export async function bulkMarkAbsentAction(formData: FormData) {
     where: { id: { in: dailyRosterIds }, rosterStatus: RosterStatus.PLANNED },
   });
 
-  for (const dailyRoster of dailyRosters) {
-    await prisma.$transaction((tx) => markAbsentCore(tx, dailyRoster, leaveTask, actingUser.id));
-  }
+  // One transaction for the whole selection, not one per row — see
+  // moveSelectedToTask in lib/actions/board.ts for why.
+  await prisma.$transaction(
+    async (tx) => {
+      for (const dailyRoster of dailyRosters) {
+        await markAbsentCore(tx, dailyRoster, leaveTask, actingUser.id);
+      }
+    },
+    { timeout: 30_000 }
+  );
 
   refresh();
 }
