@@ -18,7 +18,10 @@ const DAY_ORDER: DayOfWeek[] = [
   DayOfWeek.SUNDAY,
 ];
 
-export default async function StandardRosterSettingsPage() {
+export default async function StandardRosterSettingsPage(props: PageProps<"/settings/standard-roster">) {
+  const sp = await props.searchParams;
+  const initialSearch = typeof sp.q === "string" ? sp.q : undefined;
+
   const todayStr = todaySydneyDateString();
   const today = dateOnlyFromString(todayStr);
 
@@ -90,6 +93,7 @@ export default async function StandardRosterSettingsPage() {
           taskOptions={taskOptions}
           todayStr={todayStr}
           disabled={false}
+          initialSearch={initialSearch}
         />
       </div>
     </div>

@@ -77,6 +77,7 @@ export function StandardRosterGrid({
   taskOptions,
   todayStr,
   disabled,
+  initialSearch,
 }: {
   employees: StandardRosterEmployee[];
   patterns: StandardRosterPattern[];
@@ -84,8 +85,9 @@ export function StandardRosterGrid({
   taskOptions: TaskOption[];
   todayStr: string;
   disabled: boolean;
+  initialSearch?: string;
 }) {
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(initialSearch ?? "");
   const [departmentFilter, setDepartmentFilter] = useState("ALL");
   const [editing, setEditing] = useState<EditingCell | null>(null);
   const [showUpload, setShowUpload] = useState(false);

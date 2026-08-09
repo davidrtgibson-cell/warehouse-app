@@ -12,6 +12,11 @@ const SETTINGS_SECTIONS = [
     description: "Who can sign in, their role (leader vs. admin), and password resets.",
   },
   {
+    href: "/settings/employees",
+    label: "Team members",
+    description: "Add/deactivate employees, employment type, department, and default shift.",
+  },
+  {
     href: "/settings/tasks",
     label: "Tasks",
     description: "Direct/indirect work and leave types every roster and the live board pick from.",
