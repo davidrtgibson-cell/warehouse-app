@@ -94,18 +94,23 @@ enum ExceptionType {
 // People & access
 // ---------------------------------------------------------------------------
 
-// Leaders/admins who operate the board. Auth mechanism is intentionally not
-// finalized yet (see project notes) — this table is the identity anchor that
-// "processed by" / "changed by" columns reference everywhere else.
+// Leaders/admins who operate the board. This table is the identity anchor
+// that "processed by" / "changed by" columns reference everywhere else.
+// passwordHash is "salt:hash" hex via Node's crypto.scrypt (see
+// src/lib/password.ts) — never plaintext, no external hashing dependency.
+// Role-based authorization (what a LEADER vs ADMIN can/can't do) doesn't
+// exist yet — role is tracked but not yet enforced anywhere; see BACKLOG.md.
 model User {
-  id        String   @id @default(cuid())
-  name      String
-  email     String   @unique
-  role      UserRole @default(LEADER)
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now()) @db.Timestamptz
-  updatedAt DateTime @updatedAt @db.Timestamptz
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         UserRole @default(LEADER)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now()) @db.Timestamptz
+  updatedAt    DateTime @updatedAt @db.Timestamptz
 
+  sessions           Session[]
   processedMovements TaskMovement[]       @relation("MovementProcessedBy")
   resolvedExceptions ExceptionLog[]       @relation("ExceptionResolvedBy")
   auditEntries       AuditLog[]           @relation("AuditChangedBy")
@@ -113,6 +118,23 @@ model User {
   finalizedRosters   RosterFinalization[] @relation("RosterFinalizedBy")
 
   @@map("users")
+}
+
+// A logged-in session. The cookie holds a random opaque token; only its
+// SHA-256 hash is stored here (see src/lib/auth.ts) — same reasoning as
+// password hashing, applied to the session token, so a DB read alone can't
+// be replayed as a valid session.
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  expiresAt DateTime @db.Timestamptz
+  createdAt DateTime @default(now()) @db.Timestamptz
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
 }
 
 // Admin-configurable. Referenced by Employee and used as a reporting

@@ -18,6 +18,13 @@ import {
   RosterSource,
   MovementStatus,
 } from "../src/generated/prisma/client";
+import { hashPassword } from "../src/lib/password";
+
+// Every seeded user shares this one password — there's no admin UI yet to
+// set individual passwords (see BACKLOG.md item #2), so this is purely a
+// dev/demo convenience, never a real credential scheme. Never printed or
+// used outside this seed script.
+const DEV_PASSWORD = "changeme123";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter });
@@ -134,6 +141,7 @@ async function main() {
 
   // --- Users (leaders/admins who "process" moves, resolve exceptions, etc.) ---
   console.log("Seeding users...");
+  const devPasswordHash = await hashPassword(DEV_PASSWORD);
   const leaderSeeds = [
     { name: "Priya Deshmukh", role: UserRole.ADMIN },
     { name: "Callum Ferris", role: UserRole.LEADER },
@@ -146,15 +154,18 @@ async function main() {
     id: randomUUID(),
     name: u.name,
     email: `${u.name.toLowerCase().replace(/[^a-z]+/g, ".")}@warehouse.test`,
+    passwordHash: devPasswordHash,
     role: u.role,
   }));
   const systemUser = {
     id: randomUUID(),
     name: "Daily Roster Generation",
     email: "system.roster@warehouse.test",
+    passwordHash: devPasswordHash,
     role: UserRole.ADMIN,
   };
   await prisma.user.createMany({ data: [...users, systemUser] });
+  console.log(`  All seeded users share the dev password "${DEV_PASSWORD}" — see the DEV_PASSWORD comment above.`);
   const leaders = users.filter((u) => u.role === UserRole.LEADER);
 
   // --- Departments (admin-configurable) ---
