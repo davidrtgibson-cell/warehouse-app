@@ -8,40 +8,36 @@
 
 ## Tier 3 — Efficiency on what's already built
 
-1. **Standard Roster streamlining** — for a full-time pattern, entering the first day's shift time should
-   default the rest of the week to match (still editable per day). `StandardRosterGrid.tsx` already has the
-   per-day editing; this is a "smart default," not new mechanics — low risk, clear win for the stated goal
-   of minimizing ongoing admin.
-2. **Select-all on the roster builder.** Already exists in a small form today (`SelectAllCheckbox` next to
+1. **Select-all on the roster builder.** Already exists in a small form today (`SelectAllCheckbox` next to
    the search box on `/roster/build`) — worth clarifying what's actually missing (more prominent placement?
    a different action it should drive?) before assuming this is a from-scratch gap.
-3. **Optimize `/roster/build` layout** — the user's own framing: "functionality good, layout maybe not."
+2. **Optimize `/roster/build` layout** — the user's own framing: "functionality good, layout maybe not."
    Worth a dedicated look now that the page has grown across several sessions (generate, finalise, headcount,
    casual pool, search, bulk actions, per-row inline edits, and now the bulk time-change tool all live on one
    screen).
 
 ## Tier 4 — Structure / navigation
 
-4. **Login page → home page → rest of the app.** Login and permission levels (Tier 1) are both done — a
+3. **Login page → home page → rest of the app.** Login and permission levels (Tier 1) are both done — a
    home page in front of everything else with a card per section, filtered to what that user's
    authorization level can see (ADMIN vs LEADER, per `requireAdmin()`/the settings layout gate) is now
    unblocked. The live board stays at its own route; the home page sits in front, it doesn't replace it.
-5. **Side nav instead of the current top nav bar** — natural to pair with #4, since both are about overall
+4. **Side nav instead of the current top nav bar** — natural to pair with #3, since both are about overall
    app navigation/IA. Worth doing together rather than as two separate passes.
 
 ## Tier 5 — Growth / polish
 
-6. **Reporting: report builder.** Already flagged as a deliberate "nice to have, later" when phase 5 shipped
+5. **Reporting: report builder.** Already flagged as a deliberate "nice to have, later" when phase 5 shipped
    — a UI to pick your own columns/groupings/filters rather than the fixed by-task/by-person views. Worth
    revisiting once there's a sense of what shapes people actually reach for in the current `/reports`.
-7. **Style/branding settings** — company colour codes + logo, logo shown in the currently-empty right side
+6. **Style/branding settings** — company colour codes + logo, logo shown in the currently-empty right side
    of the header, colours applied through the UI. Mostly cosmetic/white-labelling; matches the
    "build for scalability, even potential sale" goal but doesn't block anything functional.
-8. **Test framework for code & UI testing.** Nothing's set up yet — this whole build has been verified via
+7. **Test framework for code & UI testing.** Nothing's set up yet — this whole build has been verified via
    manual dev-server checks and one-off scripts each session. Worth setting up sooner rather than later
    since the payoff compounds (every feature after it benefits), even though it doesn't unlock any new
    user-facing capability on its own. A reasonable place to start: Vitest or Jest for `src/lib/*` (pure
    functions like `break-rules.ts`, `schedule.ts`, `board-time.ts` are ideal unit-test targets already),
    Playwright for UI/end-to-end.
-9. **User manual / help function.** Lowest priority — most valuable once the feature set and UI settle down
+8. **User manual / help function.** Lowest priority — most valuable once the feature set and UI settle down
    more, so it doesn't need constant rewriting.
