@@ -20,6 +20,7 @@ import { RosterSearchBox } from "@/components/RosterSearchBox";
 import { ConfirmSubmitButton } from "@/components/ConfirmSubmitButton";
 import { InlineTaskCell } from "@/components/InlineTaskCell";
 import { InlineTimesCell } from "@/components/InlineTimesCell";
+import { BulkChangeStartTimeControl } from "@/components/BulkChangeStartTimeControl";
 import {
   generateDailyRosterFromStandard,
   finalizeRosterAction,
@@ -390,6 +391,7 @@ export default async function BuildRosterPage(props: PageProps<"/roster/build">)
               Mark selected absent
             </button>
           </form>
+          <BulkChangeStartTimeControl formId={BULK_FORM_ID} disabled={!currentUser} />
         </section>
 
         {rows.length === 0 ? (

@@ -26,6 +26,24 @@ export function plannedMinutesOnTask(start: Date, scheduledFinish: Date) {
   return elapsedMinutes(start, scheduledFinish);
 }
 
+// Clamps [start, finish) into a shift's own window, or null if there's no
+// overlap. Used both to cap OT at the shift it began on (own start/finish
+// against its own window) and to compute what "spilling into the next
+// shift" means from that next shift's board (the same movement's
+// start/finish against the *next* shift's window) — one overlap primitive,
+// no separate cap-vs-spillover logic.
+export function clampToWindow(
+  start: Date,
+  finish: Date,
+  windowStart: Date,
+  windowFinish: Date
+): { start: Date; finish: Date } | null {
+  const clampedStart = start.getTime() > windowStart.getTime() ? start : windowStart;
+  const clampedFinish = finish.getTime() < windowFinish.getTime() ? finish : windowFinish;
+  if (clampedFinish.getTime() <= clampedStart.getTime()) return null;
+  return { start: clampedStart, finish: clampedFinish };
+}
+
 export function formatDuration(totalMinutes: number) {
   const h = Math.floor(totalMinutes / 60);
   const m = totalMinutes % 60;

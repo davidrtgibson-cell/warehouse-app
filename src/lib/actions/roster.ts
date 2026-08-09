@@ -11,6 +11,8 @@ import {
   parseTimeString,
   plannedWindow,
   hoursMinutesFromTimeValue,
+  shiftAwareInstant,
+  sydneyInstant,
 } from "@/lib/schedule";
 import { dateOnlyFromString, toDateOnlyString } from "@/lib/format";
 import { closeActiveMovement, openMovement } from "@/lib/movement-core";
@@ -139,6 +141,172 @@ export async function finalizeRosterAction(dateStr: string, shift: Shift) {
 
   refresh();
   return { started: toStart.length };
+}
+
+// ---------------------------------------------------------------------------
+// Bulk change start and/or finish time — the "bring several people on
+// earlier, or extend several at once, or fix it after the fact" tool, next
+// to "Mark selected absent" on the Build Roster screen. Start and finish
+// are each independently optional: fill in just start (a pre-shift-OT
+// early start), just finish (the "Extend Shift" case, bulked), or both.
+//
+// `mode` also sets DailyRoster.shiftExtended (true for OVERTIME, false for
+// SHIFT_CHANGE) — the same flag extendShiftAction sets. The live board
+// gates its "OT · from/into <shift>" spillover badge on this flag rather
+// than on simply crossing a shift-window boundary, since an ad-hoc
+// custom-hours row (e.g. from the casual pool, or a deliberate shift
+// move) can legitimately span two shifts by design without being
+// overtime — see BoardContent in src/app/page.tsx.
+//
+// `mode` also decides what happens on the field you leave BLANK, and only
+// when the row isn't yet a "live fact" (see below for why):
+//   OVERTIME     — the blank field stays exactly where it was, so the
+//                  shift simply gets longer/shorter (the "extra hours"
+//                  case).
+//   SHIFT_CHANGE — the blank field moves by the same delta as the one you
+//                  set, preserving the row's original shift length (a
+//                  moved window, not added hours).
+//
+// A row with no ACTIVE movement yet always edits the plan — plannedStart/
+// plannedFinish/approvedFinish, same as updateRosterTimesAction. A row
+// that DOES have one gets corrected through the movement's own startTime/
+// scheduledFinish instead (that's what the board actually reads once one
+// exists) — but Finalise Roster can be run ahead of a shift's own start
+// (or the whole workDate can be a future date being planned in advance),
+// so "has a movement" isn't the same as "has genuinely started": whether
+// this counts as an already-happened fact — no drag, can't move into the
+// future, can't overlap an earlier movement — is decided by whether that
+// movement's startTime has actually passed yet, not just by whether it
+// exists. Dragging or backdating a real fact would risk silently
+// rewriting when someone actually started; that only makes sense for a
+// plan that hasn't happened yet, whether or not it's technically
+// "finalised."
+//
+// This is always a one-off, today-only edit — it never touches Standard
+// Roster. Rows that are no longer PLANNED, an already-happened row whose
+// new start would be in the future or would overlap an earlier movement
+// that day, or any row where the resulting finish wouldn't be after the
+// start, are silently skipped rather than failing the whole selection —
+// same convention as every other bulk action here.
+// ---------------------------------------------------------------------------
+
+export type BulkChangeStartTimeMode = "OVERTIME" | "SHIFT_CHANGE";
+
+export async function bulkChangeStartTimeAction(
+  dailyRosterIds: string[],
+  newStartTimeStr: string | undefined,
+  newFinishTimeStr: string | undefined,
+  mode: BulkChangeStartTimeMode,
+  note?: string
+) {
+  if (dailyRosterIds.length === 0) throw new Error("No rows selected");
+  if (!newStartTimeStr && !newFinishTimeStr) throw new Error("Enter a start time, a finish time, or both");
+  const actingUser = await requireCurrentUser();
+  const start = newStartTimeStr ? parseTimeString(newStartTimeStr) : null;
+  const finish = newFinishTimeStr ? parseTimeString(newFinishTimeStr) : null;
+  const shiftWindows = finish ? await getShiftWindows() : null;
+
+  const dailyRosters = await prisma.dailyRoster.findMany({
+    where: { id: { in: dailyRosterIds }, rosterStatus: RosterStatus.PLANNED },
+  });
+  const activeMovements = await prisma.taskMovement.findMany({
+    where: { dailyRosterId: { in: dailyRosters.map((r) => r.id) }, status: MovementStatus.ACTIVE },
+  });
+  const activeByRosterId = new Map(activeMovements.map((m) => [m.dailyRosterId, m]));
+
+  const reasonPrefix = mode === "SHIFT_CHANGE" ? "Shift change" : "Overtime";
+  const reason = note?.trim() ? `${reasonPrefix}: ${note.trim()}` : reasonPrefix;
+
+  let changed = 0;
+  await prisma.$transaction(async (tx) => {
+    for (const dailyRoster of dailyRosters) {
+      const active = activeByRosterId.get(dailyRoster.id);
+      // A movement existing isn't the same as it having genuinely started —
+      // Finalise Roster can be run ahead of a shift's own start (or the
+      // whole workDate can be a future date being planned in advance), in
+      // which case the movement it opened still has a startTime that
+      // hasn't arrived yet. Only treat this as an already-happened "fact"
+      // (no drag, can't move into the future, can't overlap) once that
+      // startTime has actually passed — otherwise it's still just the plan,
+      // wearing a movement row.
+      const isLiveFact = !!active && active.startTime.getTime() <= Date.now();
+
+      const dateStr = toDateOnlyString(dailyRoster.workDate);
+      const currentStart = active ? active.startTime : dailyRoster.plannedStart;
+      const currentFinish = active ? active.scheduledFinish : dailyRoster.plannedFinish;
+      const drag = !isLiveFact && mode === "SHIFT_CHANGE";
+
+      let newStart: Date;
+      let newFinish: Date;
+      if (start && finish) {
+        newStart = sydneyInstant(dateStr, start[0], start[1]);
+        newFinish = plannedWindow(dateStr, start, finish).plannedFinish;
+      } else if (start) {
+        newStart = sydneyInstant(dateStr, start[0], start[1]);
+        newFinish = drag ? new Date(currentFinish.getTime() + (newStart.getTime() - currentStart.getTime())) : currentFinish;
+      } else {
+        // Same forward-midnight-crossing resolution Extend Shift already
+        // uses, so a NIGHT finish typed as an early-morning hour rolls to
+        // the next day here exactly like it does there.
+        newFinish = shiftAwareInstant(shiftWindows!, dateStr, dailyRoster.shift, finish![0], finish![1]);
+        newStart = drag ? new Date(currentStart.getTime() + (newFinish.getTime() - currentFinish.getTime())) : currentStart;
+      }
+      if (newFinish.getTime() <= newStart.getTime()) continue;
+
+      if (isLiveFact) {
+        if (newStart.getTime() > Date.now()) continue; // can't retroactively start something in the future
+        const overlapping = await tx.taskMovement.findFirst({
+          where: { dailyRosterId: dailyRoster.id, id: { not: active!.id }, actualFinish: { gt: newStart } },
+        });
+        if (overlapping) continue;
+      }
+
+      if (active) {
+        // A movement already exists (finalised, whether or not it's
+        // actually started yet) — write the correction through it, since
+        // that's what the board reads once one's been opened.
+        await tx.taskMovement.update({
+          where: { id: active.id },
+          data: { startTime: newStart, scheduledFinish: newFinish },
+        });
+        await tx.dailyRoster.update({
+          where: { id: dailyRoster.id },
+          data: { approvedFinish: newFinish, overrideReason: reason, shiftExtended: mode === "OVERTIME" },
+        });
+      } else {
+        await tx.dailyRoster.update({
+          where: { id: dailyRoster.id },
+          data: {
+            plannedStart: newStart,
+            plannedFinish: newFinish,
+            approvedFinish: newFinish,
+            overrideReason: reason,
+            shiftExtended: mode === "OVERTIME",
+          },
+        });
+      }
+
+      await tx.auditLog.create({
+        data: {
+          entityType: active ? "TaskMovement" : "DailyRoster",
+          entityId: active ? active.id : dailyRoster.id,
+          action: "BULK_CHANGE_START_TIME",
+          changes: {
+            newStart: newStartTimeStr ?? null,
+            newFinish: newFinishTimeStr ?? null,
+            mode,
+            note: note ?? null,
+            wasLiveFact: isLiveFact,
+          },
+          changedByUserId: actingUser.id,
+        },
+      });
+      changed++;
+    }
+  });
+
+  refresh();
+  return { changed, skipped: dailyRosterIds.length - changed };
 }
 
 // ---------------------------------------------------------------------------

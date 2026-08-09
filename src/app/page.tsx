@@ -3,11 +3,21 @@ import { prisma } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { MovementStatus, RosterStatus, Shift, TaskCategory } from "@/generated/prisma/client";
 import { dateOnlyFromString, fmtTimeSydney, fmtWorkDate, toDateOnlyString } from "@/lib/format";
-import { currentShiftAndDateFor, DATE_RE, getShiftWindows, sydneyNowMinutesOfDay, todaySydneyDateString } from "@/lib/schedule";
+import {
+  currentShiftAndDateFor,
+  DATE_RE,
+  getShiftWindows,
+  nextShiftAndDate,
+  plannedWindow,
+  previousShiftAndDate,
+  sydneyNowMinutesOfDay,
+  todaySydneyDateString,
+  type ShiftWindowMap,
+} from "@/lib/schedule";
 import { DateNav } from "@/components/DateNav";
 import { ShiftFilterNav } from "@/components/ShiftFilter";
 import { LiveBoardGrid, type BoardTaskGroup } from "@/components/LiveBoardGrid";
-import { formatDuration, plannedMinutesOnTask } from "@/lib/board-time";
+import { clampToWindow, elapsedMinutes, formatDuration } from "@/lib/board-time";
 
 export const dynamic = "force-dynamic";
 
@@ -84,7 +94,9 @@ export default async function LiveBoardPage(props: PageProps<"/">) {
         ) : (
           <BoardContent
             workDate={workDate}
+            dateStr={dateStr}
             shift={shift}
+            shiftWindows={shiftWindows}
             currentUserId={currentUser?.id ?? null}
             finalizedAt={finalization.finalizedAt}
             finalizedByName={finalization.finalizedByUser.name}
@@ -98,20 +110,32 @@ export default async function LiveBoardPage(props: PageProps<"/">) {
 
 async function BoardContent({
   workDate,
+  dateStr,
   shift,
+  shiftWindows,
   currentUserId,
   finalizedAt,
   finalizedByName,
   isLiveShift,
 }: {
   workDate: Date;
+  dateStr: string;
   shift: Shift;
+  shiftWindows: ShiftWindowMap;
   currentUserId: string | null;
   finalizedAt: Date;
   finalizedByName: string;
   isLiveShift: boolean;
 }) {
-  const [rows, addableTasks] = await Promise.all([
+  const thisWindow = plannedWindow(dateStr, shiftWindows[shift].start, shiftWindows[shift].finish);
+  const { shift: prevShift, dateStr: prevDateStr } = previousShiftAndDate(dateStr, shift);
+  const prevWorkDate = dateOnlyFromString(prevDateStr);
+  const prevWindow = plannedWindow(prevDateStr, shiftWindows[prevShift].start, shiftWindows[prevShift].finish);
+  const { shift: nextShift, dateStr: nextDateStr } = nextShiftAndDate(dateStr, shift);
+  const nextWorkDate = dateOnlyFromString(nextDateStr);
+  const nextWindow = plannedWindow(nextDateStr, shiftWindows[nextShift].start, shiftWindows[nextShift].finish);
+
+  const [rows, addableTasks, prevRows, nextRows] = await Promise.all([
     prisma.dailyRoster.findMany({
       where: { workDate, shift, rosterStatus: RosterStatus.PLANNED },
       include: { employee: { include: { department: true } } },
@@ -120,36 +144,114 @@ async function BoardContent({
       where: { isActive: true, category: { not: TaskCategory.LEAVE } },
       orderBy: { sortOrder: "asc" },
     }),
+    // The previous/next shift's own roster rows (same shape as `rows` above)
+    // — just for name/employeeCode/department on whichever of their
+    // movements turn out to be spilling into this shift's window (see
+    // below).
+    prisma.dailyRoster.findMany({
+      where: { workDate: prevWorkDate, shift: prevShift, rosterStatus: RosterStatus.PLANNED },
+      include: { employee: { include: { department: true } } },
+    }),
+    prisma.dailyRoster.findMany({
+      where: { workDate: nextWorkDate, shift: nextShift, rosterStatus: RosterStatus.PLANNED },
+      include: { employee: { include: { department: true } } },
+    }),
   ]);
+  const prevRowById = new Map(prevRows.map((r) => [r.id, r]));
+  const nextRowById = new Map(nextRows.map((r) => [r.id, r]));
 
-  const [activeMovements, closedMinutesByTask] = await Promise.all([
-    prisma.taskMovement.findMany({
-      where: { dailyRosterId: { in: rows.map((r) => r.id) }, status: MovementStatus.ACTIVE },
-      include: { task: true },
-    }),
-    // Everyone who has already moved off a task today still counts toward its
-    // labour-hours total, so this is scoped by workDate/shift via the roster
-    // relation rather than the PLANNED-only `rows` set above (it should still
-    // count someone's worked minutes even if they were later marked absent
-    // or removed from the roster).
-    prisma.taskMovement.groupBy({
-      by: ["taskId"],
-      where: { status: MovementStatus.CLOSED, dailyRoster: { workDate, shift } },
-      _sum: { durationMinutes: true },
-    }),
-  ]);
+  const [activeMovements, closedMovements, prevActiveMovements, prevClosedMovements, nextActiveMovements, nextClosedMovements] =
+    await Promise.all([
+      prisma.taskMovement.findMany({
+        where: { dailyRosterId: { in: rows.map((r) => r.id) }, status: MovementStatus.ACTIVE },
+        include: { task: true },
+      }),
+      // Everyone who has already moved off a task today still counts toward its
+      // labour-hours total, so this is scoped by workDate/shift via the roster
+      // relation rather than the PLANNED-only `rows` set above (it should still
+      // count someone's worked minutes even if they were later marked absent
+      // or removed from the roster). Fetched in full (not a groupBy sum) so
+      // each movement's minutes can be clamped to this shift's window below —
+      // covers the rare case of a closed movement manually edited past its
+      // shift's own finish.
+      prisma.taskMovement.findMany({
+        where: { status: MovementStatus.CLOSED, dailyRoster: { workDate, shift } },
+        select: { taskId: true, startTime: true, actualFinish: true },
+      }),
+      // Previous shift's movements still running past *their own* shift's
+      // window — i.e. genuinely spilling into this one. The scheduledFinish
+      // filter is what keeps this to only the overrunning subset rather than
+      // the whole previous roster.
+      prisma.taskMovement.findMany({
+        where: {
+          dailyRosterId: { in: prevRows.map((r) => r.id) },
+          status: MovementStatus.ACTIVE,
+          scheduledFinish: { gt: prevWindow.plannedFinish },
+        },
+        include: { task: true },
+      }),
+      prisma.taskMovement.findMany({
+        where: {
+          dailyRosterId: { in: prevRows.map((r) => r.id) },
+          status: MovementStatus.CLOSED,
+          actualFinish: { gt: prevWindow.plannedFinish },
+        },
+        select: { taskId: true, startTime: true, actualFinish: true },
+      }),
+      // Mirror of the above, the other direction: next shift's movements
+      // that started before *their own* shift's window opens — i.e. an
+      // early start genuinely spilling backward into this one.
+      prisma.taskMovement.findMany({
+        where: {
+          dailyRosterId: { in: nextRows.map((r) => r.id) },
+          status: MovementStatus.ACTIVE,
+          startTime: { lt: nextWindow.plannedStart },
+        },
+        include: { task: true },
+      }),
+      prisma.taskMovement.findMany({
+        where: {
+          dailyRosterId: { in: nextRows.map((r) => r.id) },
+          status: MovementStatus.CLOSED,
+          startTime: { lt: nextWindow.plannedStart },
+        },
+        select: { taskId: true, startTime: true, actualFinish: true },
+      }),
+    ]);
   const movementByRosterId = new Map(activeMovements.map((m) => [m.dailyRosterId, m]));
-  const closedMinutesMap = new Map(closedMinutesByTask.map((g) => [g.taskId, g._sum.durationMinutes ?? 0]));
-  const closedMinutesShiftTotal = closedMinutesByTask.reduce((sum, g) => sum + (g._sum.durationMinutes ?? 0), 0);
-  // Projected, not live-ticking — see plannedMinutesOnTask in board-time.ts.
-  // Plain server-computed value now that it no longer needs a client-side
-  // clock, so this stat doesn't need its own client component.
-  const shiftTotalMinutes =
-    closedMinutesShiftTotal +
-    activeMovements.reduce((sum, m) => sum + plannedMinutesOnTask(m.startTime, m.scheduledFinish), 0);
+
+  // Closed minutes per task, this shift's own window only — own-shift closed
+  // movements plus whatever slice of the previous/next shift's closed
+  // movements (that ran past/started before their own window) falls inside
+  // this window.
+  const closedMinutesMap = new Map<string, number>();
+  let closedMinutesShiftTotal = 0;
+  for (const m of [...closedMovements, ...prevClosedMovements, ...nextClosedMovements]) {
+    const clamped = clampToWindow(m.startTime, m.actualFinish!, thisWindow.plannedStart, thisWindow.plannedFinish);
+    if (!clamped) continue;
+    const minutes = elapsedMinutes(clamped.start, clamped.finish);
+    closedMinutesMap.set(m.taskId, (closedMinutesMap.get(m.taskId) ?? 0) + minutes);
+    closedMinutesShiftTotal += minutes;
+  }
 
   const byTask = new Map<string, { taskName: string; sortOrder: number; group: BoardTaskGroup }>();
   let notYetLive = 0;
+  let activeMinutesTotal = 0;
+
+  function bucketFor(taskId: string, taskName: string, sortOrder: number) {
+    const bucket = byTask.get(taskId) ?? {
+      taskName,
+      sortOrder,
+      group: {
+        taskId,
+        taskName,
+        entries: [],
+        closedMinutesThisShift: closedMinutesMap.get(taskId) ?? 0,
+      },
+    };
+    byTask.set(taskId, bucket);
+    return bucket;
+  }
 
   for (const row of rows) {
     const movement = movementByRosterId.get(row.id);
@@ -157,27 +259,89 @@ async function BoardContent({
       notYetLive++;
       continue;
     }
-    const bucket = byTask.get(movement.taskId) ?? {
-      taskName: movement.task.name,
-      sortOrder: movement.task.sortOrder,
-      group: {
-        taskId: movement.taskId,
-        taskName: movement.task.name,
-        entries: [],
-        closedMinutesThisShift: closedMinutesMap.get(movement.taskId) ?? 0,
-      },
-    };
+    // Cap: this shift's own board only ever shows the slice of the movement
+    // that falls inside its own window, even if scheduledFinish (approvedFinish
+    // after an Extend Shift) reaches further — the remainder is the next
+    // shift's spillover to show, not this one's to keep counting.
+    const clamped = clampToWindow(
+      movement.startTime,
+      movement.scheduledFinish,
+      thisWindow.plannedStart,
+      thisWindow.plannedFinish
+    );
+    if (!clamped) continue;
+    const bucket = bucketFor(movement.taskId, movement.task.name, movement.task.sortOrder);
     bucket.group.entries.push({
       dailyRosterId: row.id,
       firstName: row.employee.firstName,
       lastName: row.employee.lastName,
       employeeCode: row.employee.employeeCode,
       departmentName: row.employee.department?.name ?? null,
-      startTime: movement.startTime,
-      scheduledFinish: movement.scheduledFinish,
+      startTime: clamped.start,
+      scheduledFinish: clamped.finish,
     });
-    byTask.set(movement.taskId, bucket);
+    activeMinutesTotal += elapsedMinutes(clamped.start, clamped.finish);
   }
+
+  // Spillover-in: the previous shift's own movements that ran past its
+  // window, clamped to *this* window — same task bucket. Tagged as OT only
+  // when that row is actually flagged shiftExtended (Extend Shift, or the
+  // "Overtime" mode of the bulk time-change tool) — a movement crossing the
+  // shift-window boundary isn't itself proof of overtime, since an ad-hoc
+  // custom-hours row (e.g. added via the casual pool, or a deliberate
+  // "Shift change") can legitimately span two shifts by design.
+  for (const movement of prevActiveMovements) {
+    const prevRow = prevRowById.get(movement.dailyRosterId);
+    if (!prevRow) continue;
+    const clamped = clampToWindow(
+      movement.startTime,
+      movement.scheduledFinish,
+      thisWindow.plannedStart,
+      thisWindow.plannedFinish
+    );
+    if (!clamped) continue;
+    const bucket = bucketFor(movement.taskId, movement.task.name, movement.task.sortOrder);
+    bucket.group.entries.push({
+      dailyRosterId: prevRow.id,
+      firstName: prevRow.employee.firstName,
+      lastName: prevRow.employee.lastName,
+      employeeCode: prevRow.employee.employeeCode,
+      departmentName: prevRow.employee.department?.name ?? null,
+      startTime: clamped.start,
+      scheduledFinish: clamped.finish,
+      spillover: prevRow.shiftExtended ? { direction: "from", shift: prevShift } : undefined,
+    });
+    activeMinutesTotal += elapsedMinutes(clamped.start, clamped.finish);
+  }
+
+  // Spillover-in the other direction: the next shift's own movements that
+  // started before its window opens, clamped to *this* window — someone
+  // brought on early ahead of their own rostered shift.
+  for (const movement of nextActiveMovements) {
+    const nextRow = nextRowById.get(movement.dailyRosterId);
+    if (!nextRow) continue;
+    const clamped = clampToWindow(
+      movement.startTime,
+      movement.scheduledFinish,
+      thisWindow.plannedStart,
+      thisWindow.plannedFinish
+    );
+    if (!clamped) continue;
+    const bucket = bucketFor(movement.taskId, movement.task.name, movement.task.sortOrder);
+    bucket.group.entries.push({
+      dailyRosterId: nextRow.id,
+      firstName: nextRow.employee.firstName,
+      lastName: nextRow.employee.lastName,
+      employeeCode: nextRow.employee.employeeCode,
+      departmentName: nextRow.employee.department?.name ?? null,
+      startTime: clamped.start,
+      scheduledFinish: clamped.finish,
+      spillover: nextRow.shiftExtended ? { direction: "into", shift: nextShift } : undefined,
+    });
+    activeMinutesTotal += elapsedMinutes(clamped.start, clamped.finish);
+  }
+
+  const shiftTotalMinutes = closedMinutesShiftTotal + activeMinutesTotal;
 
   const taskGroups = Array.from(byTask.values())
     .sort((a, b) => a.sortOrder - b.sortOrder)

@@ -6,7 +6,15 @@ import { requireCurrentUser } from "@/lib/auth";
 import { closeActiveMovement, openMovement } from "@/lib/movement-core";
 import { MovementStatus, RosterStatus, Shift, TaskCategory } from "@/generated/prisma/client";
 import { dateOnlyFromString, fmtTimeSydney, toDateOnlyString } from "@/lib/format";
-import { getShiftWindows, parseTimeString, shiftAwareInstant } from "@/lib/schedule";
+import {
+  getShiftWindows,
+  nextShiftAndDate,
+  parseTimeString,
+  plannedWindow,
+  previousShiftAndDate,
+  shiftAwareInstant,
+} from "@/lib/schedule";
+import { clampToWindow, elapsedMinutes } from "@/lib/board-time";
 
 // Called directly from the live board's client component (not a <form
 // action>), so it takes plain arguments. Closes each row's current active
@@ -186,25 +194,86 @@ export async function getMovementTimeline(dailyRosterId: string) {
 // a task-card heading can show the full roster of who's touched it today —
 // currently-on-it and moved-on both, for cards with too many people to see
 // in one scroll.
+//
+// Mirrors BoardContent's native+spillover, clamp-to-window construction (see
+// src/app/page.tsx) rather than just the viewed shift's own movements — the
+// card total this drills into already includes OT spilling in from the
+// previous shift, so this has to match or the two totals disagree.
 export async function getTaskTimeline(taskId: string, workDateStr: string, shift: Shift) {
-  const movements = await prisma.taskMovement.findMany({
-    where: { taskId, dailyRoster: { workDate: dateOnlyFromString(workDateStr), shift } },
-    include: { employee: true },
-    orderBy: { startTime: "asc" },
-  });
+  const shiftWindows = await getShiftWindows();
+  const thisWindow = plannedWindow(workDateStr, shiftWindows[shift].start, shiftWindows[shift].finish);
+  const { shift: prevShift, dateStr: prevDateStr } = previousShiftAndDate(workDateStr, shift);
+  const prevWindow = plannedWindow(prevDateStr, shiftWindows[prevShift].start, shiftWindows[prevShift].finish);
+  const { shift: nextShift, dateStr: nextDateStr } = nextShiftAndDate(workDateStr, shift);
+  const nextWindow = plannedWindow(nextDateStr, shiftWindows[nextShift].start, shiftWindows[nextShift].finish);
 
-  return movements.map((m) => ({
-    id: m.id,
-    dailyRosterId: m.dailyRosterId,
-    firstName: m.employee.firstName,
-    lastName: m.employee.lastName,
-    employeeCode: m.employee.employeeCode,
-    startTime: m.startTime,
-    scheduledFinish: m.scheduledFinish,
-    actualFinish: m.actualFinish,
-    durationMinutes: m.durationMinutes,
-    status: m.status,
-  }));
+  const [nativeMovements, prevSpilloverMovements, nextSpilloverMovements] = await Promise.all([
+    prisma.taskMovement.findMany({
+      where: { taskId, dailyRoster: { workDate: dateOnlyFromString(workDateStr), shift } },
+      include: { employee: true },
+    }),
+    // Same overrunning-subset filter BoardContent's prevActiveMovements/
+    // prevClosedMovements queries use, just combined into one query since
+    // both statuses land in the same timeline list here.
+    prisma.taskMovement.findMany({
+      where: {
+        taskId,
+        dailyRoster: { workDate: dateOnlyFromString(prevDateStr), shift: prevShift },
+        OR: [
+          { status: MovementStatus.ACTIVE, scheduledFinish: { gt: prevWindow.plannedFinish } },
+          { status: MovementStatus.CLOSED, actualFinish: { gt: prevWindow.plannedFinish } },
+        ],
+      },
+      include: { employee: true, dailyRoster: { select: { shiftExtended: true } } },
+    }),
+    // Mirror of the above, the other direction: next shift's movements that
+    // started before its own window opens.
+    prisma.taskMovement.findMany({
+      where: {
+        taskId,
+        dailyRoster: { workDate: dateOnlyFromString(nextDateStr), shift: nextShift },
+        startTime: { lt: nextWindow.plannedStart },
+      },
+      include: { employee: true, dailyRoster: { select: { shiftExtended: true } } },
+    }),
+  ]);
+
+  function toRow(m: (typeof nativeMovements)[number], spillover?: { direction: "from" | "into"; shift: Shift }) {
+    const effectiveFinish = m.status === MovementStatus.CLOSED ? m.actualFinish! : m.scheduledFinish;
+    const clamped = clampToWindow(m.startTime, effectiveFinish, thisWindow.plannedStart, thisWindow.plannedFinish);
+    if (!clamped) return null;
+    const isClosed = m.status === MovementStatus.CLOSED;
+    return {
+      id: m.id,
+      dailyRosterId: m.dailyRosterId,
+      firstName: m.employee.firstName,
+      lastName: m.employee.lastName,
+      employeeCode: m.employee.employeeCode,
+      startTime: clamped.start,
+      scheduledFinish: clamped.finish,
+      actualFinish: isClosed ? clamped.finish : null,
+      durationMinutes: isClosed ? elapsedMinutes(clamped.start, clamped.finish) : null,
+      status: m.status,
+      spillover,
+    };
+  }
+
+  // Same shiftExtended gate BoardContent uses — a movement crossing the
+  // shift-window boundary isn't proof of overtime on its own (ad-hoc
+  // custom hours can legitimately span two shifts by design).
+  const rows = [
+    ...nativeMovements.map((m) => toRow(m)),
+    ...prevSpilloverMovements.map((m) =>
+      toRow(m, m.dailyRoster.shiftExtended ? { direction: "from", shift: prevShift } : undefined)
+    ),
+    ...nextSpilloverMovements.map((m) =>
+      toRow(m, m.dailyRoster.shiftExtended ? { direction: "into", shift: nextShift } : undefined)
+    ),
+  ]
+    .filter((r): r is NonNullable<typeof r> => r !== null)
+    .sort((a, b) => a.startTime.getTime() - b.startTime.getTime());
+
+  return rows;
 }
 
 // Corrects a movement's start (and, for a closed movement, finish) after the

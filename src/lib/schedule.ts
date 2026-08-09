@@ -141,6 +141,33 @@ export function currentShiftAndDateFor(
   return { shift: Shift.AM, dateStr: todayStr };
 }
 
+// The shift + workDate whose roster row a movement running past its own
+// window's finish would be spilling *from*, for a board being viewed at
+// (dateStr, shift) — i.e. one step back around the same AM→PM→NIGHT cycle
+// currentShiftAndDateFor walks forward, rolling the date back a day when
+// stepping from AM to (yesterday's) NIGHT. Used to find the previous
+// shift's overrunning movements so the current shift's board can show its
+// slice of them (see BoardContent in src/app/page.tsx).
+export function previousShiftAndDate(dateStr: string, shift: Shift): { shift: Shift; dateStr: string } {
+  const idx = SHIFT_ORDER.indexOf(shift);
+  const prevShift = SHIFT_ORDER[(idx - 1 + SHIFT_ORDER.length) % SHIFT_ORDER.length];
+  const prevDateStr = shift === Shift.AM ? addDaysToDateString(dateStr, -1) : dateStr;
+  return { shift: prevShift, dateStr: prevDateStr };
+}
+
+// Mirror of previousShiftAndDate, stepping the SHIFT_ORDER cycle forward
+// instead of back — the shift + workDate a board at (dateStr, shift) should
+// look at for an EARLY-starting movement (someone whose own roster row is
+// the next shift, but whose recorded startTime is before that shift's own
+// window opens). Rolls the date forward a day stepping from NIGHT to
+// (tomorrow's) AM.
+export function nextShiftAndDate(dateStr: string, shift: Shift): { shift: Shift; dateStr: string } {
+  const idx = SHIFT_ORDER.indexOf(shift);
+  const nextShift = SHIFT_ORDER[(idx + 1) % SHIFT_ORDER.length];
+  const nextDateStr = shift === Shift.NIGHT ? addDaysToDateString(dateStr, 1) : dateStr;
+  return { shift: nextShift, dateStr: nextDateStr };
+}
+
 // A finish not after the start means the shift crosses midnight.
 function finishDateString(dateStr: string, start: [number, number], finish: [number, number]) {
   const startMinutes = start[0] * 60 + start[1];

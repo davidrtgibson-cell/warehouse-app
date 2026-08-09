@@ -6,6 +6,29 @@ import { extendShiftAction, getMovementTimeline, getTaskTimeline, moveSelectedTo
 import { MovementTimeRow, type TimelineMovement } from "@/components/MovementTimeRow";
 import { formatDuration, formatTimeRange, plannedMinutesOnTask } from "@/lib/board-time";
 
+// Set when an entry's own roster row belongs to a different shift than the
+// one being viewed — "from" for OT still running past that shift's own
+// finish (this shift is later than their own), "into" for someone starting
+// early ahead of that shift's own start (this shift is earlier than their
+// own). `shift` always names the person's own native shift, not the one
+// being viewed.
+export type Spillover = { direction: "from" | "into"; shift: "AM" | "PM" | "NIGHT" };
+
+function SpilloverBadge({ spillover }: { spillover: Spillover }) {
+  const title =
+    spillover.direction === "from"
+      ? `Overtime carried over from ${spillover.shift}`
+      : `Started early, ahead of their ${spillover.shift} shift`;
+  return (
+    <span
+      title={title}
+      className="rounded bg-amber-100 px-1 py-0.5 text-[10px] font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-300"
+    >
+      OT · {spillover.direction} {spillover.shift}
+    </span>
+  );
+}
+
 type TaskMember = {
   id: string;
   dailyRosterId: string;
@@ -17,6 +40,7 @@ type TaskMember = {
   actualFinish: Date | null;
   durationMinutes: number | null;
   status: "ACTIVE" | "CLOSED";
+  spillover?: Spillover;
 };
 
 function taskMemberMinutes(m: TaskMember) {
@@ -40,8 +64,9 @@ function TaskMemberLine({ member }: { member: TaskMember }) {
   return (
     <div className="flex items-center justify-between gap-2 py-1.5 text-xs">
       <div>
-        <div className="text-sm font-medium">
+        <div className="flex items-center gap-1.5 text-sm font-medium">
           {member.firstName} {member.lastName}
+          {member.spillover && <SpilloverBadge spillover={member.spillover} />}
         </div>
         <div className="text-zinc-500">{member.employeeCode}</div>
       </div>
@@ -120,6 +145,12 @@ export type BoardEntry = {
   departmentName: string | null;
   startTime: Date;
   scheduledFinish: Date;
+  // Set when this entry is spilling in from an adjacent shift's roster row
+  // (see BoardContent in src/app/page.tsx) rather than someone actually
+  // rostered on this shift — startTime/scheduledFinish are already clamped
+  // to this shift's own window, so they read like a normal entry; this is
+  // purely so the board can flag "why is this person here."
+  spillover?: Spillover;
 };
 
 export type BoardTaskGroup = {
@@ -499,8 +530,9 @@ export function LiveBoardGrid({
                         className="flex-1 text-left hover:underline"
                       >
                         <div className="flex items-baseline justify-between gap-2">
-                          <div className="text-sm font-medium">
+                          <div className="flex items-center gap-1.5 text-sm font-medium">
                             {entry.firstName} {entry.lastName}
+                            {entry.spillover && <SpilloverBadge spillover={entry.spillover} />}
                           </div>
                           <div className="whitespace-nowrap font-mono text-xs text-zinc-500">
                             {formatTimeRange(entry.startTime, entry.scheduledFinish)}
@@ -531,8 +563,9 @@ export function LiveBoardGrid({
           >
             <div className="flex items-start justify-between">
               <div>
-                <div className="font-semibold">
+                <div className="flex items-center gap-1.5 font-semibold">
                   {detail.entry.firstName} {detail.entry.lastName}
+                  {detail.entry.spillover && <SpilloverBadge spillover={detail.entry.spillover} />}
                 </div>
                 <div className="font-mono text-xs text-zinc-500">{detail.entry.employeeCode}</div>
               </div>
