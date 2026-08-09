@@ -266,7 +266,10 @@ export async function getTaskTimeline(taskId: string, workDateStr: string, shift
   const nativeRosterIds = Array.from(new Set(nativeMovements.map((m) => m.dailyRosterId)));
   const wholeShiftMovements =
     nativeRosterIds.length > 0
-      ? await prisma.taskMovement.findMany({ where: { dailyRosterId: { in: nativeRosterIds } } })
+      ? await prisma.taskMovement.findMany({
+          where: { dailyRosterId: { in: nativeRosterIds } },
+          include: { task: { select: { category: true } } },
+        })
       : [];
   const wholeShiftByRosterId = new Map<string, typeof wholeShiftMovements>();
   for (const m of wholeShiftMovements) {
@@ -289,6 +292,10 @@ export async function getTaskTimeline(taskId: string, workDateStr: string, shift
     const shiftMovements = wholeShiftByRosterId.get(rosterId) ?? [];
     const forBreak: MovementForBreakAllocation[] = [];
     for (const m of shiftMovements) {
+      // LEAVE-category movements are excluded from gross hours entirely —
+      // no work happened, so no meal break was earned or missed against
+      // them (same rule as reporting.ts's buildLaborReportRows).
+      if (m.task.category === TaskCategory.LEAVE) continue;
       const effectiveFinish = m.actualFinish ?? m.scheduledFinish;
       const clamped = clampToWindow(m.startTime, effectiveFinish, thisWindow.plannedStart, thisWindow.plannedFinish);
       if (!clamped) continue;

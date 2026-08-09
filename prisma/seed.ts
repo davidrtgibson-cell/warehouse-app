@@ -187,7 +187,12 @@ async function main() {
 
   // --- Tasks (admin-configurable) ---
   console.log("Seeding tasks...");
-  const taskSeeds: { name: string; category: TaskCategory }[] = [
+  // isPaid only varies within LEAVE (see the isPaid doc comment on Task in
+  // schema.prisma) — Annual Leave is compensated via accrued balance
+  // through payroll, not through this app's worked-hours reporting, so it's
+  // flagged unpaid *in this app's sense* despite genuinely being paid leave;
+  // LWOP is unpaid outright; Personal Leave and Other Leave are paid here.
+  const taskSeeds: { name: string; category: TaskCategory; isPaid?: boolean }[] = [
     { name: "GTP Picking", category: TaskCategory.PRODUCTIVE },
     { name: "Manual Picking", category: TaskCategory.PRODUCTIVE },
     { name: "Indent Picking", category: TaskCategory.PRODUCTIVE },
@@ -199,12 +204,18 @@ async function main() {
     { name: "Break", category: TaskCategory.INDIRECT },
     { name: "Training", category: TaskCategory.INDIRECT },
     { name: "Cleaning", category: TaskCategory.INDIRECT },
-    { name: "Annual Leave", category: TaskCategory.LEAVE },
-    { name: "Personal Leave", category: TaskCategory.LEAVE },
-    { name: "Other Leave", category: TaskCategory.LEAVE },
-    { name: "LWOP", category: TaskCategory.LEAVE },
+    { name: "Annual Leave", category: TaskCategory.LEAVE, isPaid: false },
+    { name: "Personal Leave", category: TaskCategory.LEAVE, isPaid: true },
+    { name: "Other Leave", category: TaskCategory.LEAVE, isPaid: true },
+    { name: "LWOP", category: TaskCategory.LEAVE, isPaid: false },
   ];
-  const tasks = taskSeeds.map((t, i) => ({ id: randomUUID(), name: t.name, category: t.category, sortOrder: i }));
+  const tasks = taskSeeds.map((t, i) => ({
+    id: randomUUID(),
+    name: t.name,
+    category: t.category,
+    isPaid: t.isPaid ?? true,
+    sortOrder: i,
+  }));
   await prisma.task.createMany({ data: tasks });
   const productiveTasks = tasks.filter((t) => t.category === TaskCategory.PRODUCTIVE);
   const leaveTasks = tasks.filter((t) => t.category === TaskCategory.LEAVE);

@@ -186,7 +186,14 @@ async function BoardContent({
       // shift's own finish.
       prisma.taskMovement.findMany({
         where: { status: MovementStatus.CLOSED, dailyRoster: { workDate, shift } },
-        select: { id: true, dailyRosterId: true, taskId: true, startTime: true, actualFinish: true },
+        select: {
+          id: true,
+          dailyRosterId: true,
+          taskId: true,
+          startTime: true,
+          actualFinish: true,
+          task: { select: { category: true } },
+        },
       }),
       // Previous shift's movements still running past *their own* shift's
       // window — i.e. genuinely spilling into this one. The scheduledFinish
@@ -259,8 +266,17 @@ async function BoardContent({
     list.push({ id, taskId, startTime: clamped.start, effectiveFinish: clamped.finish });
     nativeMovementsByRosterId.set(rosterId, list);
   }
-  for (const m of closedMovements) addNativeMovement(m.id, m.dailyRosterId, m.taskId, m.startTime, m.actualFinish!);
-  for (const m of activeMovements) addNativeMovement(m.id, m.dailyRosterId, m.taskId, m.startTime, m.scheduledFinish);
+  // LEAVE-category movements are excluded from gross hours entirely — no
+  // work happened, so no meal break was earned or missed against them (same
+  // rule as reporting.ts's buildLaborReportRows and getTaskTimeline).
+  for (const m of closedMovements) {
+    if (m.task.category === TaskCategory.LEAVE) continue;
+    addNativeMovement(m.id, m.dailyRosterId, m.taskId, m.startTime, m.actualFinish!);
+  }
+  for (const m of activeMovements) {
+    if (m.task.category === TaskCategory.LEAVE) continue;
+    addNativeMovement(m.id, m.dailyRosterId, m.taskId, m.startTime, m.scheduledFinish);
+  }
 
   const breakRuleTiers = breakRules.map((r) => ({
     isActive: r.isActive,

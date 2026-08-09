@@ -245,6 +245,7 @@ export default async function ReportsPage(props: PageProps<"/reports">) {
                 <tr>
                   <th className="px-3 py-2">Task</th>
                   <th className="px-3 py-2">Direct/Indirect</th>
+                  <th className="px-3 py-2">Paid</th>
                   <th className="px-3 py-2">People</th>
                   <th className="px-3 py-2">Raw task hours</th>
                 </tr>
@@ -254,6 +255,9 @@ export default async function ReportsPage(props: PageProps<"/reports">) {
                   <tr key={t.taskName}>
                     <td className="px-3 py-2 font-medium">{t.taskName}</td>
                     <td className="px-3 py-2 text-zinc-500">{categoryLabel(t.category)}</td>
+                    <td className="px-3 py-2 text-zinc-500">
+                      {t.category === TaskCategory.LEAVE ? (t.isPaid ? "Yes" : "No") : "—"}
+                    </td>
                     <td className="px-3 py-2">{t.peopleCount}</td>
                     <td className="px-3 py-2 font-mono">{formatDuration(t.rawMinutes)}</td>
                   </tr>

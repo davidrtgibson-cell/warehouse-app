@@ -26,6 +26,9 @@ export type ReportRow = {
   taskName: string;
   departmentName: string | null;
   category: TaskCategory;
+  // Only meaningful for LEAVE-category rows (see Task.isPaid's doc comment
+  // in schema.prisma) — PRODUCTIVE/INDIRECT tasks are always true.
+  isPaid: boolean;
   firstTaskStart: Date;
   lastTaskFinish: Date;
   rawTaskMinutes: number;
@@ -103,12 +106,18 @@ export async function buildLaborReportRows(filters: ReportFilters): Promise<Repo
     const rosterMovements = movementsByRosterId.get(dailyRoster.id) ?? [];
     if (rosterMovements.length === 0) continue;
 
-    const forBreak: MovementForBreakAllocation[] = rosterMovements.map((m) => ({
-      id: m.id,
-      taskId: m.taskId,
-      startTime: m.startTime,
-      effectiveFinish: m.actualFinish ?? m.scheduledFinish,
-    }));
+    // LEAVE-category movements are excluded from gross hours entirely — no
+    // work happened, so no meal break was earned or missed against them
+    // (they still get their own task-level row below, via rosterMovements,
+    // just not counted toward this shift's gross/break/net columns).
+    const forBreak: MovementForBreakAllocation[] = rosterMovements
+      .filter((m) => m.task.category !== TaskCategory.LEAVE)
+      .map((m) => ({
+        id: m.id,
+        taskId: m.taskId,
+        startTime: m.startTime,
+        effectiveFinish: m.actualFinish ?? m.scheduledFinish,
+      }));
 
     const dateStr = toDateOnlyString(dailyRoster.workDate);
     const breakStartHM = shiftWindows[dailyRoster.shift].breakStart;
@@ -125,7 +134,7 @@ export async function buildLaborReportRows(filters: ReportFilters): Promise<Repo
     // Sub-group this roster row's movements by task for the row-level columns.
     const byTask = new Map<
       string,
-      { taskName: string; category: TaskCategory; firstStart: Date; lastFinish: Date; rawMinutes: number }
+      { taskName: string; category: TaskCategory; isPaid: boolean; firstStart: Date; lastFinish: Date; rawMinutes: number }
     >();
     for (const m of rosterMovements) {
       const effectiveFinish = m.actualFinish ?? m.scheduledFinish;
@@ -139,6 +148,7 @@ export async function buildLaborReportRows(filters: ReportFilters): Promise<Repo
         byTask.set(m.taskId, {
           taskName: m.task.name,
           category: m.task.category,
+          isPaid: m.task.isPaid,
           firstStart: m.startTime,
           lastFinish: effectiveFinish,
           rawMinutes: minutes,
@@ -159,6 +169,7 @@ export async function buildLaborReportRows(filters: ReportFilters): Promise<Repo
         taskName: task.taskName,
         departmentName: dailyRoster.employee.department?.name ?? null,
         category: task.category,
+        isPaid: task.isPaid,
         firstTaskStart: task.firstStart,
         lastTaskFinish: task.lastFinish,
         rawTaskMinutes: Math.max(0, task.rawMinutes - deduction),
@@ -194,6 +205,7 @@ const CSV_HEADERS = [
   "Task",
   "Department",
   "Direct/Indirect",
+  "Paid",
   "First task start",
   "Last task finish",
   "Raw task minutes",
@@ -217,6 +229,7 @@ export function reportRowsToCsv(rows: ReportRow[]): string {
         row.taskName,
         row.departmentName ?? "",
         categoryLabel(row.category),
+        row.isPaid ? "Yes" : "No",
         fmtTimeSydney(row.firstTaskStart),
         fmtTimeSydney(row.lastTaskFinish),
         row.rawTaskMinutes,
@@ -235,15 +248,24 @@ export function reportRowsToCsv(rows: ReportRow[]): string {
 // Small on-screen summary helpers — group the same rows by task or by
 // person for the preview toggle on /reports, without a second DB query.
 export function summarizeByTask(rows: ReportRow[]) {
-  const map = new Map<string, { taskName: string; category: TaskCategory; people: Set<string>; rawMinutes: number }>();
+  const map = new Map<
+    string,
+    { taskName: string; category: TaskCategory; isPaid: boolean; people: Set<string>; rawMinutes: number }
+  >();
   for (const row of rows) {
-    const entry = map.get(row.taskName) ?? { taskName: row.taskName, category: row.category, people: new Set(), rawMinutes: 0 };
+    const entry = map.get(row.taskName) ?? {
+      taskName: row.taskName,
+      category: row.category,
+      isPaid: row.isPaid,
+      people: new Set(),
+      rawMinutes: 0,
+    };
     entry.people.add(row.employeeCode);
     entry.rawMinutes += row.rawTaskMinutes;
     map.set(row.taskName, entry);
   }
   return Array.from(map.values())
-    .map((e) => ({ taskName: e.taskName, category: e.category, peopleCount: e.people.size, rawMinutes: e.rawMinutes }))
+    .map((e) => ({ taskName: e.taskName, category: e.category, isPaid: e.isPaid, peopleCount: e.people.size, rawMinutes: e.rawMinutes }))
     .sort((a, b) => b.rawMinutes - a.rawMinutes);
 }
 

@@ -202,6 +202,15 @@ model Task {
   id        String       @id @default(cuid())
   name      String       @unique
   category  TaskCategory
+  // Chiefly meaningful for LEAVE-category tasks — e.g. Personal Leave paid,
+  // Annual Leave *not* paid in this app's sense (it's compensated via
+  // accrued balance through payroll, not through this app's worked-hours
+  // reporting), LWOP unpaid. Defaults true since PRODUCTIVE/INDIRECT tasks
+  // are virtually always paid; feeds the paid/unpaid split in reporting
+  // (src/lib/reporting.ts). Does not affect break-rule gross-hours
+  // eligibility — that's driven by category (LEAVE is excluded entirely),
+  // not this flag; see src/lib/break-rules.ts.
+  isPaid    Boolean      @default(true)
   isActive  Boolean      @default(true)
   sortOrder Int          @default(0)
   createdAt DateTime     @default(now()) @db.Timestamptz
@@ -327,18 +336,18 @@ model RosterFinalization {
 // live-board/finalize purposes, with an explicit custom start/finish
 // overriding the bucket's canonical window (see addCasualToRoster).
 model ShiftWindow {
-  id         String   @id @default(cuid())
-  shift      Shift    @unique
-  startTime  DateTime @db.Time
-  finishTime DateTime @db.Time
+  id             String    @id @default(cuid())
+  shift          Shift     @unique
+  startTime      DateTime  @db.Time
+  finishTime     DateTime  @db.Time
   // Optional scheduled unpaid-break start time for this shift (e.g. AM's
   // break at 11:00) — null means no scheduled time is configured yet, in
   // which case the break-deduction logic falls back to taking the unpaid
   // minutes off whichever task the person spent the most time on that
   // shift instead. See src/lib/break-rules.ts.
   breakStartTime DateTime? @db.Time
-  createdAt  DateTime @default(now()) @db.Timestamptz
-  updatedAt  DateTime @updatedAt @db.Timestamptz
+  createdAt      DateTime  @default(now()) @db.Timestamptz
+  updatedAt      DateTime  @updatedAt @db.Timestamptz
 
   @@map("shift_windows")
 }
