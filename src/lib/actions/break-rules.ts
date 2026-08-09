@@ -2,7 +2,7 @@
 
 import { refresh } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requireCurrentUser } from "@/lib/auth";
+import { requireAdmin } from "@/lib/auth";
 
 // Break rules — the admin-configurable "how many unpaid minutes, above
 // what hours-worked threshold" table (see BreakRule in schema.prisma).
@@ -27,7 +27,7 @@ function parseMinutes(value: string): number {
 }
 
 export async function createBreakRuleAction(description: string, minHoursWorkedStr: string, unpaidMinutesStr: string) {
-  const actingUser = await requireCurrentUser();
+  const actingUser = await requireAdmin();
   const trimmedDescription = description.trim();
   if (!trimmedDescription) throw new Error("Description is required");
   const minHoursWorked = parseHours(minHoursWorkedStr);
@@ -60,7 +60,7 @@ export async function updateBreakRuleAction(
   minHoursWorkedStr: string,
   unpaidMinutesStr: string
 ) {
-  const actingUser = await requireCurrentUser();
+  const actingUser = await requireAdmin();
   const trimmedDescription = description.trim();
   if (!trimmedDescription) throw new Error("Description is required");
   const minHoursWorked = parseHours(minHoursWorkedStr);
@@ -99,7 +99,7 @@ export async function updateBreakRuleAction(
 // shouldn't erase the record of it having existed (reporting/audit may
 // still reference it).
 export async function setBreakRuleActiveAction(id: string, isActive: boolean) {
-  const actingUser = await requireCurrentUser();
+  const actingUser = await requireAdmin();
 
   const existing = await prisma.breakRule.findUnique({ where: { id } });
   if (!existing) throw new Error("Break rule not found");
@@ -123,7 +123,7 @@ export async function setBreakRuleActiveAction(id: string, isActive: boolean) {
 // Swaps sortOrder with the adjacent ACTIVE rule (retired rules aren't part
 // of the visible ordering a leader is arranging).
 export async function moveBreakRuleAction(id: string, direction: "up" | "down") {
-  const actingUser = await requireCurrentUser();
+  const actingUser = await requireAdmin();
 
   const activeRules = await prisma.breakRule.findMany({
     where: { isActive: true },

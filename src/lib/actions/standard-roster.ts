@@ -2,7 +2,7 @@
 
 import { refresh } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requireCurrentUser } from "@/lib/auth";
+import { requireAdmin } from "@/lib/auth";
 import { DATE_RE, parseTimeString, timeValueFromHoursMinutes, todaySydneyDateString } from "@/lib/schedule";
 import { addDaysToDateString, dateOnlyFromString, toDateOnlyString } from "@/lib/format";
 import { DayOfWeek, Prisma, Shift, TaskCategory } from "@/generated/prisma/client";
@@ -44,7 +44,7 @@ export type StandardRosterRowInput = {
 
 export async function upsertStandardRosterRowAction(input: StandardRosterRowInput) {
   if (!DATE_RE.test(input.effectiveFromStr)) throw new Error("Invalid effective-from date");
-  const actingUser = await requireCurrentUser();
+  const actingUser = await requireAdmin();
 
   const start = parseTimeString(input.startTimeStr);
   const finish = parseTimeString(input.finishTimeStr);
@@ -134,7 +134,7 @@ export async function endStandardRosterPatternAction(
   effectiveToStr?: string
 ) {
   if (effectiveToStr && !DATE_RE.test(effectiveToStr)) throw new Error("Invalid date");
-  const actingUser = await requireCurrentUser();
+  const actingUser = await requireAdmin();
 
   const openRows = await findOpenRows(prisma, employeeId, dayOfWeek);
   if (openRows.length === 0) throw new Error("No active pattern to end");
@@ -242,7 +242,7 @@ export async function bulkUploadStandardRosterAction(
   effectiveFromStr: string,
   commit: boolean
 ): Promise<BulkUploadResult> {
-  const actingUser = await requireCurrentUser();
+  const actingUser = await requireAdmin();
   if (!DATE_RE.test(effectiveFromStr)) throw new Error("Invalid effective-from date");
   const effectiveFrom = dateOnlyFromString(effectiveFromStr);
 

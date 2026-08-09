@@ -1,15 +1,11 @@
 import Link from "next/link";
 import { prisma } from "@/lib/db";
-import { getCurrentUser } from "@/lib/auth";
 import { BreakRulesGrid, type BreakRuleRow } from "@/components/BreakRulesGrid";
 
 export const dynamic = "force-dynamic";
 
 export default async function BreakRulesSettingsPage() {
-  const [currentUser, rules] = await Promise.all([
-    getCurrentUser(),
-    prisma.breakRule.findMany({ orderBy: [{ isActive: "desc" }, { sortOrder: "asc" }] }),
-  ]);
+  const rules = await prisma.breakRule.findMany({ orderBy: [{ isActive: "desc" }, { sortOrder: "asc" }] });
 
   const rows: BreakRuleRow[] = rules.map((r) => ({
     id: r.id,
@@ -40,13 +36,8 @@ export default async function BreakRulesSettingsPage() {
             screen.
           </p>
         </div>
-        {!currentUser && (
-          <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
-            Select an acting user from the &quot;Acting as&quot; picker above before editing.
-          </div>
-        )}
         <section className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
-          <BreakRulesGrid rules={rows} disabled={!currentUser} />
+          <BreakRulesGrid rules={rows} disabled={false} />
         </section>
       </div>
     </div>

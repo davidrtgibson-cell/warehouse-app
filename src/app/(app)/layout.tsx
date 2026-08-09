@@ -29,9 +29,11 @@ export default async function AppLayout({ children }: LayoutProps<"/">) {
             <Link href="/reports" className="hover:underline">
               Reports
             </Link>
-            <Link href="/settings" className="hover:underline">
-              Settings
-            </Link>
+            {currentUser.role === "ADMIN" && (
+              <Link href="/settings" className="hover:underline">
+                Settings
+              </Link>
+            )}
           </nav>
           <div className="flex items-center gap-3 text-xs">
             <span className="text-zinc-500">

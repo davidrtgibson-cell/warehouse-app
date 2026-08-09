@@ -20,10 +20,11 @@ import {
 } from "../src/generated/prisma/client";
 import { hashPassword } from "../src/lib/password";
 
-// Every seeded user shares this one password — there's no admin UI yet to
-// set individual passwords (see BACKLOG.md item #2), so this is purely a
-// dev/demo convenience, never a real credential scheme. Never printed or
-// used outside this seed script.
+// Every seeded user shares this one password. Users created later via the
+// Settings > Users screen (src/app/(app)/settings/users) get an
+// admin-chosen password instead — this is purely a dev/demo convenience for
+// bootstrapping the very first seeded accounts, never a real credential
+// scheme. Never printed or used outside this seed script.
 const DEV_PASSWORD = "changeme123";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });

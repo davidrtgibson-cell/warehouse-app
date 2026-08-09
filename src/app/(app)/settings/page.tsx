@@ -7,6 +7,11 @@ export const dynamic = "force-dynamic";
 // can be added as more links here without a URL restructure.
 const SETTINGS_SECTIONS = [
   {
+    href: "/settings/users",
+    label: "Users",
+    description: "Who can sign in, their role (leader vs. admin), and password resets.",
+  },
+  {
     href: "/settings/shifts",
     label: "Shift hours",
     description: "AM/PM/NIGHT start & finish times, and each shift's scheduled break time.",

@@ -1,6 +1,5 @@
 import Link from "next/link";
 import { prisma } from "@/lib/db";
-import { getCurrentUser } from "@/lib/auth";
 import { hoursMinutesFromTimeValue } from "@/lib/schedule";
 import { Shift } from "@/generated/prisma/client";
 import { ShiftHoursEditor, type ShiftWindowRow } from "@/components/ShiftHoursEditor";
@@ -14,7 +13,7 @@ function hhmm(hours: number, minutes: number) {
 }
 
 export default async function ShiftSettingsPage() {
-  const [currentUser, rows] = await Promise.all([getCurrentUser(), prisma.shiftWindow.findMany()]);
+  const rows = await prisma.shiftWindow.findMany();
   const byShift = new Map(rows.map((r) => [r.shift, r]));
 
   const windows: ShiftWindowRow[] = SHIFT_ORDER.map((shift) => {
@@ -50,13 +49,8 @@ export default async function ShiftSettingsPage() {
             spent the most time on instead.
           </p>
         </div>
-        {!currentUser && (
-          <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
-            Select an acting user from the &quot;Acting as&quot; picker above before editing.
-          </div>
-        )}
         <section className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
-          <ShiftHoursEditor windows={windows} disabled={!currentUser} />
+          <ShiftHoursEditor windows={windows} disabled={false} />
         </section>
       </div>
     </div>

@@ -1,6 +1,5 @@
 import Link from "next/link";
 import { prisma } from "@/lib/db";
-import { getCurrentUser } from "@/lib/auth";
 import { standardRosterCurrentWhere } from "@/lib/roster-queries";
 import { dateOnlyFromString, toDateOnlyString } from "@/lib/format";
 import { hoursMinutesFromTimeValue, todaySydneyDateString } from "@/lib/schedule";
@@ -23,8 +22,7 @@ export default async function StandardRosterSettingsPage() {
   const todayStr = todaySydneyDateString();
   const today = dateOnlyFromString(todayStr);
 
-  const [currentUser, employeesRaw, activeRows, tasks] = await Promise.all([
-    getCurrentUser(),
+  const [employeesRaw, activeRows, tasks] = await Promise.all([
     prisma.employee.findMany({
       where: { isActive: true },
       include: { department: true },
@@ -85,19 +83,13 @@ export default async function StandardRosterSettingsPage() {
           </p>
         </div>
 
-        {!currentUser && (
-          <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
-            Select an acting user from the &quot;Acting as&quot; picker above before editing.
-          </div>
-        )}
-
         <StandardRosterGrid
           employees={employees}
           patterns={patterns}
           dayOrder={DAY_ORDER}
           taskOptions={taskOptions}
           todayStr={todayStr}
-          disabled={!currentUser}
+          disabled={false}
         />
       </div>
     </div>

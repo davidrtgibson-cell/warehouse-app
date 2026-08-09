@@ -2,7 +2,7 @@
 
 import { refresh } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requireCurrentUser } from "@/lib/auth";
+import { requireAdmin } from "@/lib/auth";
 import { hoursMinutesFromTimeValue, parseTimeString, timeValueFromHoursMinutes } from "@/lib/schedule";
 import type { Shift } from "@/generated/prisma/client";
 
@@ -14,12 +14,10 @@ function hhmm(t: Date) {
 // Called directly from ShiftHoursEditor (client component), not <form
 // action>, so it takes plain arguments — same split as
 // updateRosterTimesAction/updateRosterTaskAction (see the doc comment above
-// those in lib/actions/roster.ts). No role check beyond requireCurrentUser
-// — this app has no role-based authorization anywhere yet (see auth.ts),
-// so gating this one action differently would be inventing a new
-// authorization layer inconsistent with every other mutation.
+// those in lib/actions/roster.ts). requireAdmin (not requireCurrentUser) —
+// everything under /settings is ADMIN-only, see requireAdmin's doc comment.
 export async function updateShiftWindowAction(shift: Shift, startTimeStr: string, finishTimeStr: string) {
-  const actingUser = await requireCurrentUser();
+  const actingUser = await requireAdmin();
 
   const [startHours, startMinutes] = parseTimeString(startTimeStr);
   const [finishHours, finishMinutes] = parseTimeString(finishTimeStr);
@@ -60,7 +58,7 @@ export async function updateShiftWindowAction(shift: Shift, startTimeStr: string
 // out of. `null` clears it, falling that shift back to deducting from
 // whichever task the person spent the most time on instead.
 export async function updateShiftBreakTimeAction(shift: Shift, breakStartTimeStr: string | null) {
-  const actingUser = await requireCurrentUser();
+  const actingUser = await requireAdmin();
 
   const existing = await prisma.shiftWindow.findUnique({ where: { shift } });
   if (!existing) throw new Error(`No ShiftWindow row for ${shift} — check migration/seed`);

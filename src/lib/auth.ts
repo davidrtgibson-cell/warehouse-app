@@ -21,9 +21,11 @@ import type { User } from "@/generated/prisma/client";
 // surface it inline. Real page-level "you must be logged in to see this at
 // all" protection is handled once, in src/app/(app)/layout.tsx, not here.
 //
-// Role-based authorization (what a LEADER vs ADMIN can/can't do) doesn't
-// exist yet — see BACKLOG.md item #2. Any signed-in user can call every
-// action, same as before; this pass is only about proving who's signed in.
+// Role-based authorization: requireAdmin() below gates the app's
+// "configuration" surface (everything under /settings, including this
+// pass's user maintenance) to ADMIN. Day-to-day roster/board operations
+// (lib/actions/roster.ts, board.ts) stay on requireCurrentUser() — any
+// signed-in LEADER or ADMIN can run those, unchanged from before.
 // ---------------------------------------------------------------------------
 
 const SESSION_COOKIE = "session";
@@ -83,6 +85,19 @@ export async function requireCurrentUser(): Promise<User> {
   const user = await getCurrentUser();
   if (!user) {
     throw new Error("Your session has expired — please sign in again.");
+  }
+  return user;
+}
+
+// Gates admin-only actions (currently: everything under /settings, see
+// src/app/(app)/settings/layout.tsx for the matching page-level gate). Both
+// layers check independently — the layout keeps a LEADER from seeing the
+// screen at all, this keeps a crafted request to the server action itself
+// from working even if they somehow reached the form.
+export async function requireAdmin(): Promise<User> {
+  const user = await requireCurrentUser();
+  if (user.role !== "ADMIN") {
+    throw new Error("Admins only.");
   }
   return user;
 }
