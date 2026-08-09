@@ -365,7 +365,6 @@ export default async function BuildRosterPage(props: PageProps<"/roster/build">)
         <section className="flex flex-wrap items-center gap-2 rounded-lg border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-950">
           <RosterSearchBox />
           <SelectAllCheckbox formId={BULK_FORM_ID} name="dailyRosterId" />
-          <span className="text-xs text-zinc-500">Select all visible, then:</span>
           <form id={BULK_FORM_ID} action={bulkMarkAbsentAction} className="flex items-center gap-2">
             <select
               name="leaveTaskId"
