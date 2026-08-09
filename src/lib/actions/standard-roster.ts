@@ -42,16 +42,89 @@ export type StandardRosterRowInput = {
   effectiveFromStr: string;
 };
 
-export async function upsertStandardRosterRowAction(input: StandardRosterRowInput) {
-  if (!DATE_RE.test(input.effectiveFromStr)) throw new Error("Invalid effective-from date");
-  const actingUser = await requireAdmin();
+// Shared by upsertStandardRosterRowAction and upsertStandardRosterWeekAction
+// (the "copy to the rest of the week" streamlining) — one day's worth of
+// the open-row-check-then-create-then-audit-log work, run inside a caller-
+// supplied transaction so multiple days can commit atomically together.
+async function upsertOneDay(
+  tx: TxClient,
+  actingUserId: string,
+  employeeCode: string,
+  taskName: string,
+  input: StandardRosterRowInput,
+  start: [number, number],
+  finish: [number, number],
+  effectiveFrom: Date
+) {
+  const openRows = await findOpenRows(tx, input.employeeId, input.dayOfWeek);
+  for (const row of openRows) {
+    if (row.effectiveFrom.getTime() >= effectiveFrom.getTime()) {
+      throw new Error(
+        `${input.dayOfWeek}: new pattern must start after the existing pattern's effective date (${toDateOnlyString(row.effectiveFrom)})`
+      );
+    }
+  }
 
+  if (openRows.length > 0) {
+    const closeDate = dateOnlyFromString(addDaysToDateString(input.effectiveFromStr, -1));
+    await tx.standardRoster.updateMany({
+      where: { id: { in: openRows.map((r) => r.id) } },
+      data: { effectiveTo: closeDate },
+    });
+  }
+
+  const row = await tx.standardRoster.create({
+    data: {
+      employeeId: input.employeeId,
+      dayOfWeek: input.dayOfWeek,
+      shift: input.shift,
+      startTime: timeValueFromHoursMinutes(start[0], start[1]),
+      finishTime: timeValueFromHoursMinutes(finish[0], finish[1]),
+      paidHours: input.paidHours,
+      defaultTaskId: input.defaultTaskId,
+      effectiveFrom,
+      effectiveTo: null,
+      isActive: true,
+    },
+  });
+
+  await tx.auditLog.create({
+    data: {
+      entityType: "StandardRoster",
+      entityId: row.id,
+      action: openRows.length > 0 ? "UPDATE_STANDARD_ROSTER" : "CREATE_STANDARD_ROSTER",
+      changes: {
+        employeeCode,
+        dayOfWeek: input.dayOfWeek,
+        shift: input.shift,
+        start: input.startTimeStr,
+        finish: input.finishTimeStr,
+        paidHours: input.paidHours,
+        task: taskName,
+        effectiveFrom: input.effectiveFromStr,
+        replacedRowIds: openRows.map((r) => r.id),
+      },
+      changedByUserId: actingUserId,
+    },
+  });
+
+  return row;
+}
+
+function validateRowInput(input: StandardRosterRowInput) {
+  if (!DATE_RE.test(input.effectiveFromStr)) throw new Error("Invalid effective-from date");
   const start = parseTimeString(input.startTimeStr);
   const finish = parseTimeString(input.finishTimeStr);
   if (start[0] === finish[0] && start[1] === finish[1]) {
     throw new Error("Start and finish can't be the same time");
   }
   if (!(input.paidHours > 0)) throw new Error("Paid hours must be greater than 0");
+  return { start, finish, effectiveFrom: dateOnlyFromString(input.effectiveFromStr) };
+}
+
+export async function upsertStandardRosterRowAction(input: StandardRosterRowInput) {
+  const actingUser = await requireAdmin();
+  const { start, finish, effectiveFrom } = validateRowInput(input);
 
   const employee = await prisma.employee.findFirst({ where: { id: input.employeeId, isActive: true } });
   if (!employee) throw new Error("Invalid employee");
@@ -60,68 +133,65 @@ export async function upsertStandardRosterRowAction(input: StandardRosterRowInpu
   });
   if (!task) throw new Error("Invalid task");
 
-  const effectiveFrom = dateOnlyFromString(input.effectiveFromStr);
-  const openRows = await findOpenRows(prisma, input.employeeId, input.dayOfWeek);
-  for (const row of openRows) {
-    if (row.effectiveFrom.getTime() >= effectiveFrom.getTime()) {
-      throw new Error(
-        `New pattern must start after the existing pattern's effective date (${toDateOnlyString(row.effectiveFrom)})`
-      );
-    }
-  }
-
-  const created = await prisma.$transaction(async (tx) => {
-    if (openRows.length > 0) {
-      const closeDate = dateOnlyFromString(addDaysToDateString(input.effectiveFromStr, -1));
-      await tx.standardRoster.updateMany({
-        where: { id: { in: openRows.map((r) => r.id) } },
-        data: { effectiveTo: closeDate },
-      });
-    }
-
-    const row = await tx.standardRoster.create({
-      data: {
-        employeeId: input.employeeId,
-        dayOfWeek: input.dayOfWeek,
-        shift: input.shift,
-        startTime: timeValueFromHoursMinutes(start[0], start[1]),
-        finishTime: timeValueFromHoursMinutes(finish[0], finish[1]),
-        paidHours: input.paidHours,
-        defaultTaskId: input.defaultTaskId,
-        effectiveFrom,
-        effectiveTo: null,
-        isActive: true,
-      },
-    });
-
-    await tx.auditLog.create({
-      data: {
-        entityType: "StandardRoster",
-        entityId: row.id,
-        action: openRows.length > 0 ? "UPDATE_STANDARD_ROSTER" : "CREATE_STANDARD_ROSTER",
-        changes: {
-          employeeCode: employee.employeeCode,
-          dayOfWeek: input.dayOfWeek,
-          shift: input.shift,
-          start: input.startTimeStr,
-          finish: input.finishTimeStr,
-          paidHours: input.paidHours,
-          task: task.name,
-          effectiveFrom: input.effectiveFromStr,
-          replacedRowIds: openRows.map((r) => r.id),
-        },
-        changedByUserId: actingUser.id,
-      },
-    });
-
-    return row;
-  });
+  const created = await prisma.$transaction((tx) =>
+    upsertOneDay(tx, actingUser.id, employee.employeeCode, task.name, input, start, finish, effectiveFrom)
+  );
 
   refresh();
   // Only plain, serializable data may cross back over the server-action
   // boundary to the client caller — the raw row carries a Decimal
   // (paidHours), which isn't. Callers here only need the id.
   return { id: created.id };
+}
+
+// The "entering the first day's shift time should default the rest of the
+// week to match" streamlining (BACKLOG.md Tier 3 #1) — one atomic
+// transaction covering the primary day plus every day in extraDays, all
+// sharing the same shift/time/task/paidHours/effectiveFrom, rather than the
+// client calling upsertStandardRosterRowAction once per day (which doesn't
+// work reliably — see the comment on why below). All days succeed or none
+// do, and one refresh() at the end rather than one per day.
+//
+// Deliberately NOT implemented client-side as N sequential calls to
+// upsertStandardRosterRowAction: each call's own refresh() (a Server Action-
+// only client-router refresh signal) interacts with React's transition
+// scheduling in a way that silently abandons later awaits in the same
+// startTransition — found the hard way, verified via a live browser session
+// where a 5-day "copy to week" save appeared to succeed (modal closed, no
+// error) but persisted nothing at all, not even the first day.
+export async function upsertStandardRosterWeekAction(input: StandardRosterRowInput, extraDays: DayOfWeek[]) {
+  const actingUser = await requireAdmin();
+  const { start, finish, effectiveFrom } = validateRowInput(input);
+  for (const day of extraDays) {
+    if (!DAY_VALUES.has(day)) throw new Error(`Invalid day: ${day}`);
+  }
+
+  const employee = await prisma.employee.findFirst({ where: { id: input.employeeId, isActive: true } });
+  if (!employee) throw new Error("Invalid employee");
+  const task = await prisma.task.findFirst({
+    where: { id: input.defaultTaskId, isActive: true, category: { not: TaskCategory.LEAVE } },
+  });
+  if (!task) throw new Error("Invalid task");
+
+  const days = [input.dayOfWeek, ...extraDays.filter((d) => d !== input.dayOfWeek)];
+
+  await prisma.$transaction(async (tx) => {
+    for (const day of days) {
+      await upsertOneDay(
+        tx,
+        actingUser.id,
+        employee.employeeCode,
+        task.name,
+        { ...input, dayOfWeek: day },
+        start,
+        finish,
+        effectiveFrom
+      );
+    }
+  });
+
+  refresh();
+  return { days };
 }
 
 // ---------------------------------------------------------------------------

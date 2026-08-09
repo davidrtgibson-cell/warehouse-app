@@ -5,6 +5,7 @@ import {
   bulkUploadStandardRosterAction,
   endStandardRosterPatternAction,
   upsertStandardRosterRowAction,
+  upsertStandardRosterWeekAction,
   type BulkUploadResult,
 } from "@/lib/actions/standard-roster";
 import { DayOfWeek, Shift, type EmploymentType } from "@/generated/prisma/enums";
@@ -46,6 +47,17 @@ const DAY_LABELS: Record<DayOfWeek, string> = {
 };
 
 const SHIFT_OPTIONS: Shift[] = [Shift.AM, Shift.PM, Shift.NIGHT];
+
+// "For a full-time pattern" (BACKLOG.md's own framing) — Mon–Fri, not the
+// weekend, is what the "default the rest of the week to match" streamlining
+// applies to.
+const WEEKDAYS: DayOfWeek[] = [
+  DayOfWeek.MONDAY,
+  DayOfWeek.TUESDAY,
+  DayOfWeek.WEDNESDAY,
+  DayOfWeek.THURSDAY,
+  DayOfWeek.FRIDAY,
+];
 
 const CSV_TEMPLATE_HEADER = "Employee Code,Day,Shift,Start,Finish,Paid Hours,Task";
 const CSV_EXAMPLE = `EMP-0001,MONDAY,AM,06:00,14:00,8,GTP Picking`;
@@ -255,6 +267,10 @@ export function StandardRosterGrid({
           todayStr={todayStr}
           disabled={disabled}
           onClose={() => setEditing(null)}
+          emptyWeekdays={WEEKDAYS.filter(
+            (d) => d !== editing.dayOfWeek && !patternsByKey.has(`${editing.employee.id}:${d}`)
+          )}
+          hasAnyPatternForEmployee={patterns.some((p) => p.employeeId === editing.employee.id)}
         />
       )}
     </div>
@@ -267,12 +283,16 @@ function EditPatternModal({
   todayStr,
   disabled,
   onClose,
+  emptyWeekdays,
+  hasAnyPatternForEmployee,
 }: {
   editing: EditingCell;
   taskOptions: TaskOption[];
   todayStr: string;
   disabled: boolean;
   onClose: () => void;
+  emptyWeekdays: DayOfWeek[];
+  hasAnyPatternForEmployee: boolean;
 }) {
   const { employee, dayOfWeek, pattern } = editing;
   const [shift, setShift] = useState<Shift>(pattern?.shift ?? Shift.AM);
@@ -283,6 +303,16 @@ function EditPatternModal({
   const [effectiveFrom, setEffectiveFrom] = useState(todayStr);
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
+
+  // Offered only when adding a brand-new pattern (not editing an existing
+  // day) and there's at least one other weekday still empty to fill.
+  // Streamlining per BACKLOG.md: entering the first day's shift defaults
+  // the rest of the week to match, still editable per day afterward — so
+  // this only pre-checks itself when this really is the employee's first
+  // day being set up (hasAnyPatternForEmployee false); adding one more day
+  // to an already-partially-set-up week defaults to off instead.
+  const canCopyToWeek = !pattern && emptyWeekdays.length > 0;
+  const [copyToWeek, setCopyToWeek] = useState(canCopyToWeek && !hasAnyPatternForEmployee);
 
   function save() {
     const hours = Number(paidHours);
@@ -296,7 +326,7 @@ function EditPatternModal({
     }
     startTransition(async () => {
       try {
-        await upsertStandardRosterRowAction({
+        const input = {
           employeeId: employee.id,
           dayOfWeek,
           shift,
@@ -305,7 +335,12 @@ function EditPatternModal({
           paidHours: hours,
           defaultTaskId: taskId,
           effectiveFromStr: effectiveFrom,
-        });
+        };
+        if (canCopyToWeek && copyToWeek) {
+          await upsertStandardRosterWeekAction(input, emptyWeekdays);
+        } else {
+          await upsertStandardRosterRowAction(input);
+        }
         onClose();
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to save");
@@ -431,6 +466,22 @@ function EditPatternModal({
           </label>
         </div>
 
+        {canCopyToWeek && (
+          <label className="mt-3 flex items-start gap-2 rounded border border-zinc-200 bg-zinc-50 p-2 text-xs text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400">
+            <input
+              type="checkbox"
+              checked={copyToWeek}
+              disabled={isPending}
+              onChange={(e) => setCopyToWeek(e.target.checked)}
+              className="mt-0.5"
+            />
+            <span>
+              Also apply this shift/time/task to the rest of the week ({emptyWeekdays.map((d) => DAY_LABELS[d]).join(", ")}
+              ) — still editable per day afterward. Skips any day that already has a pattern.
+            </span>
+          </label>
+        )}
+
         {error && <div className="mt-2 text-xs text-red-600">{error}</div>}
 
         <div className="mt-4 flex items-center justify-between gap-2">
@@ -452,7 +503,7 @@ function EditPatternModal({
             onClick={save}
             className="rounded border border-zinc-300 px-3 py-1.5 text-sm font-medium hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-900"
           >
-            {isPending ? "Saving…" : "Save from this date"}
+            {isPending ? "Saving…" : canCopyToWeek && copyToWeek ? "Save for the week" : "Save from this date"}
           </button>
         </div>
       </div>
