@@ -40,7 +40,7 @@ export default async function RosterPage(props: PageProps<"/roster">) {
       <div className="mx-auto max-w-5xl space-y-8">
         <header className="space-y-4">
           <div>
-            <Link href="/" className="text-sm text-zinc-500 hover:underline">
+            <Link href="/board" className="text-sm text-zinc-500 hover:underline">
               ← Live board
             </Link>
             <h1 className="text-2xl font-semibold">Employee roster</h1>
