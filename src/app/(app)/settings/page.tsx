@@ -41,6 +41,11 @@ const SETTINGS_SECTIONS = [
     label: "Break rules",
     description: "Unpaid meal-break deductions by hours worked — editable per your EA/business rules.",
   },
+  {
+    href: "/settings/branding",
+    label: "Branding",
+    description: "Accent colour and logo — cosmetic white-labelling, shared across the whole app.",
+  },
 ];
 
 export default function SettingsIndexPage() {

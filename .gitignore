@@ -24,6 +24,9 @@
 # production
 /build
 
+# admin-uploaded runtime content (branding logo — see src/lib/actions/branding.ts)
+/public/uploads/
+
 # misc
 .DS_Store
 *.pem

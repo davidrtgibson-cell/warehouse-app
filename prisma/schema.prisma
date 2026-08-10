@@ -387,6 +387,31 @@ model ShiftWindow {
   @@map("shift_windows")
 }
 
+// One row for the whole deployment (single company per instance, not
+// multi-tenant) — cosmetic white-labelling (BACKLOG.md Tier 5). Always
+// read/written via the fixed id "singleton" (see src/lib/branding.ts)
+// rather than a real primary-key lookup, since there's only ever meant to
+// be one row.
+model BrandingSettings {
+  id String @id @default(cuid())
+
+  // Hex colour ("#2563eb"), applied to a small set of high-visibility spots
+  // (side nav header band, active nav item, login page) — deliberately not
+  // a full re-theme of every button/link in the app. Null = default
+  // neutral zinc styling, unchanged from before this feature existed.
+  accentColor String?
+
+  // Path under /public (e.g. "/uploads/logo.png") to an admin-uploaded logo
+  // image; null = no logo, falls back to the plain "Warehouse App" wordmark.
+  // The file itself lives on disk, not in the database — see
+  // updateBrandingAction in src/lib/actions/branding.ts.
+  logoPath String?
+
+  updatedAt DateTime @updatedAt @db.Timestamptz
+
+  @@map("branding_settings")
+}
+
 // ---------------------------------------------------------------------------
 // Task movements — the live board's core record
 // ---------------------------------------------------------------------------

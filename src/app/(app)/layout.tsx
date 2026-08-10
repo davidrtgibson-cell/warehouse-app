@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import { getCurrentUser } from "@/lib/auth";
 import { logoutAction } from "@/lib/actions/auth";
+import { getBranding } from "@/lib/branding";
 import { SideNav, type SideNavItem } from "@/components/SideNav";
 
 // The actual "you must be signed in" gate for the whole app — every real
@@ -19,6 +20,8 @@ export default async function AppLayout({ children }: LayoutProps<"/">) {
   const currentUser = await getCurrentUser();
   if (!currentUser) redirect("/login");
 
+  const branding = await getBranding();
+
   const navItems: SideNavItem[] = [
     { href: "/", label: "Home" },
     { href: "/board", label: "Live board" },
@@ -31,12 +34,24 @@ export default async function AppLayout({ children }: LayoutProps<"/">) {
   return (
     <div className="flex min-h-screen">
       <aside className="flex w-56 flex-shrink-0 flex-col border-r border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
-        <div className="border-b border-zinc-200 px-4 py-4 dark:border-zinc-800">
-          <Link href="/" className="text-sm font-semibold hover:underline">
-            Warehouse App
+        <div
+          style={branding.accentColor ? { backgroundColor: branding.accentColor } : undefined}
+          className={
+            branding.accentColor
+              ? "flex items-center px-4 py-4"
+              : "border-b border-zinc-200 px-4 py-4 dark:border-zinc-800"
+          }
+        >
+          <Link href="/" className={branding.accentColor ? "text-sm font-semibold text-white hover:underline" : "text-sm font-semibold hover:underline"}>
+            {branding.logoPath ? (
+              // eslint-disable-next-line @next/next/no-img-element -- admin-uploaded file on disk, not a static/optimizable asset
+              <img src={branding.logoPath} alt="Warehouse App" className="h-8 w-auto" />
+            ) : (
+              "Warehouse App"
+            )}
           </Link>
         </div>
-        <SideNav items={navItems} />
+        <SideNav items={navItems} accentColor={branding.accentColor} />
         <div className="border-t border-zinc-200 p-3 text-xs dark:border-zinc-800">
           <div className="text-zinc-500">
             {currentUser.name} <span className="text-zinc-400">({currentUser.role === "ADMIN" ? "Admin" : "Leader"})</span>
