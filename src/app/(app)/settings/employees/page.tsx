@@ -43,9 +43,9 @@ export default async function EmployeesSettingsPage() {
             </Link>{" "}
             pattern) and casual/agency/contractor (the daily casual pool, no pattern of their own).
             Deactivating someone removes them from the roster builder and casual pool; every past roster
-            row they&apos;re already on stays intact. Moving someone from casual/agency/contractor to
-            perm/part-time prompts setting up their Standard Roster pattern, since they won&apos;t have
-            one yet.
+            row they&apos;re already on stays intact. Adding a new perm/part-time team member, or moving
+            someone from casual/agency/contractor to perm/part-time, prompts setting up their Standard
+            Roster pattern, since they won&apos;t have one yet.
           </p>
         </div>
         <EmployeeManagementGrid employees={employees} departments={departments} />

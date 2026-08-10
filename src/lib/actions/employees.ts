@@ -4,7 +4,7 @@ import { refresh } from "next/cache";
 import { prisma } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth";
 import { EmploymentType, Shift } from "@/generated/prisma/client";
-import { isTempToPermConversion } from "@/lib/employee-rules";
+import { isNewPermOrPartTime, isTempToPermConversion } from "@/lib/employee-rules";
 
 // Team member maintenance (BACKLOG.md Tier 2 #1) — add/retire employees
 // (soft delete via isActive, same convention as Task/BreakRule/User),
@@ -35,7 +35,14 @@ export type EmployeeInput = {
   defaultShift: string | null;
 };
 
-export async function createEmployeeAction(input: EmployeeInput) {
+// Returns whether this new hire needs the "go build their Standard Roster
+// pattern" prompt — any brand-new PERMANENT/PART_TIME employee, since a
+// pattern can't exist yet for someone who didn't exist a moment ago
+// (BACKLOG.md Tier 5: "adding a new perm/part-time team member should
+// prompt to build their standard roster"). Same prompt UI as the
+// temp→perm conversion case in updateEmployeeAction below, just a
+// different trigger condition (no "from" type to compare against).
+export async function createEmployeeAction(input: EmployeeInput): Promise<{ suggestStandardRoster: boolean }> {
   const actingUser = await requireAdmin();
   const employeeCode = input.employeeCode.trim();
   const firstName = input.firstName.trim();
@@ -78,6 +85,7 @@ export async function createEmployeeAction(input: EmployeeInput) {
   });
 
   refresh();
+  return { suggestStandardRoster: isNewPermOrPartTime(employmentType) };
 }
 
 // Returns whether this save is a temp→perm conversion, so the calling UI

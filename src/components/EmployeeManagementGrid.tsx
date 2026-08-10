@@ -8,7 +8,7 @@ import {
   updateEmployeeAction,
   type EmployeeInput,
 } from "@/lib/actions/employees";
-import { isTempToPermConversion } from "@/lib/employee-rules";
+import { isNewPermOrPartTime, isTempToPermConversion } from "@/lib/employee-rules";
 import { EmploymentType, Shift } from "@/generated/prisma/enums";
 import { formatEmploymentType } from "@/lib/roster-display";
 
@@ -74,8 +74,12 @@ function EmployeeModal({
             name: `${input.firstName.trim()} ${input.lastName.trim()}`,
           });
         } else {
-          await createEmployeeAction(input);
-          onClose();
+          const result = await createEmployeeAction(input);
+          onClose({
+            suggestStandardRoster: result.suggestStandardRoster,
+            employeeCode: input.employeeCode.trim(),
+            name: `${input.firstName.trim()} ${input.lastName.trim()}`,
+          });
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to save");
@@ -83,7 +87,9 @@ function EmployeeModal({
     });
   }
 
-  const willConvert = employee ? isTempToPermConversion(employee.employmentType, employmentType) : false;
+  const willConvert = employee
+    ? isTempToPermConversion(employee.employmentType, employmentType)
+    : isNewPermOrPartTime(employmentType);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => onClose()}>
@@ -155,8 +161,9 @@ function EmployeeModal({
 
         {willConvert && (
           <p className="mt-3 rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
-            This moves {employee?.firstName} from casual/agency/contractor to a standing employment type — after
-            saving, you&apos;ll be prompted to set up their Standard Roster pattern (they don&apos;t have one yet).
+            {employee
+              ? `This moves ${employee.firstName} from casual/agency/contractor to a standing employment type — after saving, you'll be prompted to set up their Standard Roster pattern (they don't have one yet).`
+              : "After saving, you'll be prompted to set up this person's Standard Roster pattern — perm/part-time employees need one."}
           </p>
         )}
 
@@ -187,7 +194,7 @@ function StatusBanner({
   return (
     <div className="flex items-center justify-between gap-3 rounded-lg border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-200">
       <span>
-        {banner.name} is now perm/part-time — they have no Standard Roster pattern yet.{" "}
+        {banner.name} is perm/part-time and has no Standard Roster pattern yet.{" "}
         <Link href={`/settings/standard-roster?q=${encodeURIComponent(banner.employeeCode)}`} className="underline">
           Set up their pattern →
         </Link>
