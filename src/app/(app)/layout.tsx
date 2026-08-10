@@ -33,7 +33,10 @@ export default async function AppLayout({ children }: LayoutProps<"/">) {
 
   return (
     <div className="flex min-h-screen">
-      <aside className="flex w-56 flex-shrink-0 flex-col border-r border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
+      {/* no-print (globals.css) — every real page lives under this layout,
+          including /roster/print, so the side nav needs its own opt-out
+          rather than relying on the print page's own .no-print elements. */}
+      <aside className="no-print flex w-56 flex-shrink-0 flex-col border-r border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
         <div
           style={branding.accentColor ? { backgroundColor: branding.accentColor } : undefined}
           className={
