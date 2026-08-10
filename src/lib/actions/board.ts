@@ -30,14 +30,18 @@ import { computeEmployeeBreakAllocation, type MovementForBreakAllocation } from 
 // movement (would create a negative-duration close — two movements for the
 // same person can never overlap) are silently skipped rather than failing
 // the whole selection.
+//
+// LEAVE-category tasks are legal move targets (not excluded by category) —
+// someone going home sick, or taking a part-day Annual Leave, is a live-board
+// move like any other. Task.isVisible (schema.prisma) is what keeps a
+// LEAVE task from cluttering the board with a persistent card; it doesn't
+// restrict moving to one.
 export async function moveSelectedToTask(dailyRosterIds: string[], taskId: string, atTimeStr?: string) {
   if (dailyRosterIds.length === 0) throw new Error("No rows selected");
 
   const actingUser = await requireCurrentUser();
 
-  const task = await prisma.task.findFirst({
-    where: { id: taskId, isActive: true, category: { not: TaskCategory.LEAVE } },
-  });
+  const task = await prisma.task.findFirst({ where: { id: taskId, isActive: true } });
   if (!task) throw new Error("Invalid task");
 
   const dailyRosters = await prisma.dailyRoster.findMany({
@@ -110,11 +114,10 @@ export async function extendShiftAction(
 
   const actingUser = await requireCurrentUser();
 
+  // Same as moveSelectedToTask above — LEAVE tasks aren't excluded here either.
   let task: { id: string; name: string } | null = null;
   if (taskId) {
-    task = await prisma.task.findFirst({
-      where: { id: taskId, isActive: true, category: { not: TaskCategory.LEAVE } },
-    });
+    task = await prisma.task.findFirst({ where: { id: taskId, isActive: true } });
     if (!task) throw new Error("Invalid task");
   }
 

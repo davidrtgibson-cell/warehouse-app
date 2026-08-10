@@ -105,6 +105,32 @@ export async function setTaskActiveAction(id: string, isActive: boolean) {
   refresh();
 }
 
+// Board-visibility toggle — see Task.isVisible's doc comment in
+// schema.prisma. Independent of isActive: a hidden task stays a normal,
+// selectable move target on the live board, it just doesn't get a
+// persistent card there.
+export async function setTaskVisibleAction(id: string, isVisible: boolean) {
+  const actingUser = await requireAdmin();
+
+  const existing = await prisma.task.findUnique({ where: { id } });
+  if (!existing) throw new Error("Task not found");
+
+  await prisma.$transaction(async (tx) => {
+    await tx.task.update({ where: { id }, data: { isVisible } });
+    await tx.auditLog.create({
+      data: {
+        entityType: "Task",
+        entityId: id,
+        action: isVisible ? "SHOW_TASK_ON_BOARD" : "HIDE_TASK_FROM_BOARD",
+        changes: { name: existing.name },
+        changedByUserId: actingUser.id,
+      },
+    });
+  });
+
+  refresh();
+}
+
 // Swaps sortOrder with the adjacent ACTIVE task (retired tasks aren't part
 // of the visible ordering an admin is arranging).
 export async function moveTaskAction(id: string, direction: "up" | "down") {

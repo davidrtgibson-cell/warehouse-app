@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { createTaskAction, moveTaskAction, setTaskActiveAction, updateTaskAction } from "@/lib/actions/tasks";
+import { createTaskAction, moveTaskAction, setTaskActiveAction, setTaskVisibleAction, updateTaskAction } from "@/lib/actions/tasks";
 
 export type TaskRow = {
   id: string;
@@ -9,6 +9,7 @@ export type TaskRow = {
   category: "PRODUCTIVE" | "INDIRECT" | "LEAVE";
   isPaid: boolean;
   isActive: boolean;
+  isVisible: boolean;
   sortOrder: number;
 };
 
@@ -131,6 +132,17 @@ function TaskRowView({ task, disabled, isFirst, isLast }: { task: TaskRow; disab
     });
   }
 
+  function toggleVisible() {
+    startTransition(async () => {
+      try {
+        await setTaskVisibleAction(task.id, !task.isVisible);
+        setMessage(null);
+      } catch (err) {
+        setMessage(err instanceof Error ? err.message : "Failed to update");
+      }
+    });
+  }
+
   function move(direction: "up" | "down") {
     startTransition(async () => {
       try {
@@ -162,6 +174,7 @@ function TaskRowView({ task, disabled, isFirst, isLast }: { task: TaskRow; disab
         <div className="text-xs text-zinc-500">
           {categoryLabel(task.category)}
           {task.category === "LEAVE" && (task.isPaid ? " · paid" : " · unpaid")}
+          {!task.isVisible && " · hidden from live board"}
           {!task.isActive && " · retired"}
         </div>
         {message && <div className="text-xs text-red-600">{message}</div>}
@@ -189,6 +202,19 @@ function TaskRowView({ task, disabled, isFirst, isLast }: { task: TaskRow; disab
             </button>
           </>
         )}
+        <button
+          type="button"
+          disabled={disabled || isPending}
+          onClick={toggleVisible}
+          title={
+            task.isVisible
+              ? "Hide from the live board grid — still selectable as a move target"
+              : "Show a card for this task on the live board"
+          }
+          className="rounded border border-zinc-300 px-2 py-0.5 hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-900"
+        >
+          {task.isVisible ? "Hide from board" : "Show on board"}
+        </button>
         <button
           type="button"
           disabled={disabled || isPending}

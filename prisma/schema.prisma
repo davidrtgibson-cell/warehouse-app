@@ -214,6 +214,19 @@ model Task {
   // not this flag; see src/lib/break-rules.ts.
   isPaid    Boolean      @default(true)
   isActive  Boolean      @default(true)
+  // Whether this task gets its own card on the live board (src/app/(app)/board/page.tsx)
+  // when someone's on it — independent of isActive/category. A hidden task
+  // is still a normal selectable move target (moveSelectedToTask/
+  // extendShiftAction, src/lib/actions/board.ts) and still shows on the
+  // roster/reports; it just doesn't clutter the live board with a
+  // persistent card. Chiefly meant for LEAVE tasks (someone going home
+  // sick, a part-day Annual Leave) — the live board doesn't need a running
+  // "who's on leave" card, but a leader does need to be able to move
+  // someone there mid-shift. Time on a hidden task is also excluded from
+  // the board's own "Total shift hours" summary stat (not from reporting's
+  // gross/break-hours math, which is already keyed off category, not this
+  // flag) — see BoardContent's isVisible checks.
+  isVisible Boolean      @default(true)
   sortOrder Int          @default(0)
   createdAt DateTime     @default(now()) @db.Timestamptz
   updatedAt DateTime     @updatedAt @db.Timestamptz
@@ -233,8 +246,9 @@ model Task {
 
 // A future date range an employee is known to be on leave, entered ahead of
 // time (BACKLOG.md Tier 2 #1) — distinct from unplanned leave (sick, goes
-// home mid-shift), which is already fully handled on the live board/roster
-// builder via a Move or markAbsentAction and needs no new modeling here.
+// home mid-shift), which is handled on the live board via a Move (to a
+// LEAVE-category task, now a legal move target — see Task.isVisible above)
+// or, pre-shift, via markAbsentAction. Neither needs any new modeling here.
 // Deliberately doesn't touch DailyRoster directly: instead,
 // generateDailyRosterFromStandard (src/lib/actions/roster.ts) checks this
 // table at generation time and substitutes taskId for the employee's usual

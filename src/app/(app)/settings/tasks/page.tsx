@@ -13,6 +13,7 @@ export default async function TasksSettingsPage() {
     category: t.category,
     isPaid: t.isPaid,
     isActive: t.isActive,
+    isVisible: t.isVisible,
     sortOrder: t.sortOrder,
   }));
 
@@ -30,7 +31,11 @@ export default async function TasksSettingsPage() {
             tasks: it feeds the paid/unpaid split in reporting, and doesn&apos;t affect break-rule
             eligibility — Leave tasks are always excluded from gross hours worked, paid or not. Retiring
             a task keeps every past roster/movement row that already used it intact; it just stops
-            appearing as a choice for new ones.
+            appearing as a choice for new ones. &quot;Hide from board&quot; is separate from retiring —
+            a hidden task stays fully usable (still selectable when moving someone mid-shift, e.g. onto
+            Sick Leave, or a part-day Annual Leave), it just doesn&apos;t get its own persistent card on
+            the live board, and its time doesn&apos;t count toward the board&apos;s &quot;Total shift
+            hours&quot; figure.
           </p>
         </div>
         <section className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">

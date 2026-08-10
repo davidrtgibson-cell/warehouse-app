@@ -149,8 +149,12 @@ async function BoardContent({
       where: { workDate, shift, rosterStatus: RosterStatus.PLANNED },
       include: { employee: { include: { department: true } } },
     }),
+    // Every active task is a legal move target, LEAVE included — see the
+    // doc comment on moveSelectedToTask in src/lib/actions/board.ts. What a
+    // task's own isVisible flag controls is whether it gets a card below,
+    // not whether it's choosable here.
     prisma.task.findMany({
-      where: { isActive: true, category: { not: TaskCategory.LEAVE } },
+      where: { isActive: true },
       orderBy: { sortOrder: "asc" },
     }),
     // The previous/next shift's own roster rows (same shape as `rows` above)
@@ -192,7 +196,7 @@ async function BoardContent({
           taskId: true,
           startTime: true,
           actualFinish: true,
-          task: { select: { category: true } },
+          task: { select: { category: true, isVisible: true } },
         },
       }),
       // Previous shift's movements still running past *their own* shift's
@@ -213,7 +217,7 @@ async function BoardContent({
           status: MovementStatus.CLOSED,
           actualFinish: { gt: prevWindow.plannedFinish },
         },
-        select: { taskId: true, startTime: true, actualFinish: true },
+        select: { taskId: true, startTime: true, actualFinish: true, task: { select: { isVisible: true } } },
       }),
       // Mirror of the above, the other direction: next shift's movements
       // that started before *their own* shift's window opens — i.e. an
@@ -232,7 +236,7 @@ async function BoardContent({
           status: MovementStatus.CLOSED,
           startTime: { lt: nextWindow.plannedStart },
         },
-        select: { taskId: true, startTime: true, actualFinish: true },
+        select: { taskId: true, startTime: true, actualFinish: true, task: { select: { isVisible: true } } },
       }),
     ]);
   const movementByRosterId = new Map(activeMovements.map((m) => [m.dailyRosterId, m]));
@@ -247,8 +251,15 @@ async function BoardContent({
     const clamped = clampToWindow(m.startTime, m.actualFinish!, thisWindow.plannedStart, thisWindow.plannedFinish);
     if (!clamped) continue;
     const minutes = elapsedMinutes(clamped.start, clamped.finish);
+    // Hidden tasks (Task.isVisible — e.g. Sick Leave, part-day Annual
+    // Leave, see schema.prisma) never get a card below, so their minutes
+    // are also kept out of the shift-wide "Total shift hours" total —
+    // otherwise that figure would silently include time no card on the
+    // board accounts for. closedMinutesMap itself can still hold the
+    // entry; it's only ever read via bucketFor, which skips hidden tasks
+    // the same way.
+    if (m.task.isVisible) closedMinutesShiftTotal += minutes;
     closedMinutesMap.set(m.taskId, (closedMinutesMap.get(m.taskId) ?? 0) + minutes);
-    closedMinutesShiftTotal += minutes;
   }
 
   // Unpaid break deduction — native rows only (see comment above
@@ -337,6 +348,11 @@ async function BoardContent({
       thisWindow.plannedFinish
     );
     if (!clamped) continue;
+    // Hidden tasks never get a card, and their time is kept out of the
+    // "Total shift hours" total (see the closedMinutesMap loop above) —
+    // this person still counts toward "Live" (they have an active
+    // movement), they just don't appear on any task card.
+    if (!movement.task.isVisible) continue;
     const bucket = bucketFor(movement.taskId, movement.task.name, movement.task.sortOrder);
     const breakInfo = breakInfoByRosterId.get(row.id);
     bucket.group.entries.push({
@@ -370,6 +386,7 @@ async function BoardContent({
       thisWindow.plannedFinish
     );
     if (!clamped) continue;
+    if (!movement.task.isVisible) continue;
     const bucket = bucketFor(movement.taskId, movement.task.name, movement.task.sortOrder);
     bucket.group.entries.push({
       dailyRosterId: prevRow.id,
@@ -397,6 +414,7 @@ async function BoardContent({
       thisWindow.plannedFinish
     );
     if (!clamped) continue;
+    if (!movement.task.isVisible) continue;
     const bucket = bucketFor(movement.taskId, movement.task.name, movement.task.sortOrder);
     bucket.group.entries.push({
       dailyRosterId: nextRow.id,
