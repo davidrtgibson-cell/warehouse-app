@@ -28,6 +28,7 @@ export default async function AppLayout({ children }: LayoutProps<"/">) {
     { href: "/roster", label: "Roster" },
     { href: "/roster/build", label: "Build roster" },
     { href: "/reports", label: "Reports" },
+    { href: "/help", label: "Help" },
     ...(currentUser.role === "ADMIN" ? [{ href: "/settings", label: "Settings" }] : []),
   ];
 

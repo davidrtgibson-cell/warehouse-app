@@ -35,6 +35,12 @@ const SECTIONS = [
     adminOnly: false,
   },
   {
+    href: "/help",
+    label: "Help",
+    description: "How each screen works, and what to do in common situations.",
+    adminOnly: false,
+  },
+  {
     href: "/settings",
     label: "Settings",
     description: "Users, tasks, team members, planned leave, shifts, break rules, and standard rosters.",
