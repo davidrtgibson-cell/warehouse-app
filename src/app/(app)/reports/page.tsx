@@ -1,7 +1,13 @@
 import Link from "next/link";
 import { prisma } from "@/lib/db";
 import { addDaysToDateString } from "@/lib/format";
-import { todaySydneyDateString } from "@/lib/schedule";
+import {
+  currentShiftAndDateFor,
+  getShiftWindows,
+  previousShiftAndDate,
+  sydneyNowMinutesOfDay,
+  todaySydneyDateString,
+} from "@/lib/schedule";
 import { formatDuration } from "@/lib/board-time";
 import { buildLaborReportRows, summarizeByPerson, summarizeByTask } from "@/lib/reporting";
 import { EmploymentType, Shift, TaskCategory } from "@/generated/prisma/client";
@@ -24,9 +30,34 @@ export default async function ReportsPage(props: PageProps<"/reports">) {
   const sp = await props.searchParams;
 
   const today = todaySydneyDateString();
-  const from = str(sp.from) ?? addDaysToDateString(today, -6);
-  const to = str(sp.to) ?? today;
-  const shift = str(sp.shift) as Shift | undefined;
+
+  // First-ever visit (no filters submitted yet, detected via `from`'s
+  // absence — every "Apply filters" GET always carries a real date there,
+  // even when every other field is left at "All") defaults to the shift
+  // that just ended, not a 7-day/all-shifts window — most real use of this
+  // page is end-of-shift reporting (BACKLOG.md Tier 5 #4). Once the form's
+  // been submitted at all, an explicitly-cleared "All shifts" is respected
+  // rather than re-defaulted back to a specific one.
+  const isFirstVisit = typeof sp.from !== "string";
+  let defaultFrom = addDaysToDateString(today, -6);
+  let defaultTo = today;
+  let defaultShift: Shift | undefined;
+  if (isFirstVisit) {
+    const shiftWindows = await getShiftWindows();
+    const { shift: liveShift, dateStr: liveDateStr } = currentShiftAndDateFor(
+      shiftWindows,
+      today,
+      sydneyNowMinutesOfDay()
+    );
+    const { shift: prevShift, dateStr: prevDateStr } = previousShiftAndDate(liveDateStr, liveShift);
+    defaultFrom = prevDateStr;
+    defaultTo = prevDateStr;
+    defaultShift = prevShift;
+  }
+
+  const from = str(sp.from) ?? defaultFrom;
+  const to = str(sp.to) ?? defaultTo;
+  const shift = (str(sp.shift) as Shift | undefined) ?? defaultShift;
   const employeeId = str(sp.employeeId);
   const taskId = str(sp.taskId);
   const departmentId = str(sp.departmentId);

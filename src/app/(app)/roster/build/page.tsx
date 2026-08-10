@@ -4,10 +4,15 @@ import { getCurrentUser } from "@/lib/auth";
 import { Shift, MovementStatus, RosterStatus, RosterSource, TaskCategory } from "@/generated/prisma/client";
 import { dateOnlyFromString, fmtTimeSydney, fmtWorkDate } from "@/lib/format";
 import {
+  currentShiftAndDateFor,
   dayOfWeekForDateString,
+  getShiftWindows,
   hoursMinutesFromTimeValue,
+  nextShiftAndDate,
   parseShiftFilter,
   resolveWorkDate,
+  sydneyNowMinutesOfDay,
+  todaySydneyDateString,
   type ShiftFilter,
 } from "@/lib/schedule";
 import { standardRosterEligibilityWhere } from "@/lib/roster-queries";
@@ -48,7 +53,26 @@ function parseSortDir(value: string | undefined): "asc" | "desc" {
 export default async function BuildRosterPage(props: PageProps<"/roster/build">) {
   const sp = await props.searchParams;
   const requested = typeof sp.date === "string" ? sp.date : undefined;
-  const dateStr = await resolveWorkDate(requested);
+  // First-ever visit (no `date` in the URL — DateNav/ShiftFilterNav always
+  // set one once clicked, so its absence means nothing's been navigated
+  // yet) defaults forward to the next shift's date, not backward to the
+  // most recent date that already has a roster (what resolveWorkDate does
+  // for /roster and /roster/print, where "view/print what already exists"
+  // is the more common intent) — most real use of this screen is building
+  // the *next* shift ahead of time (BACKLOG.md Tier 5 #5).
+  let dateStr: string;
+  if (requested) {
+    dateStr = await resolveWorkDate(requested);
+  } else {
+    const shiftWindows = await getShiftWindows();
+    const today = todaySydneyDateString();
+    const { shift: liveShift, dateStr: liveDateStr } = currentShiftAndDateFor(
+      shiftWindows,
+      today,
+      sydneyNowMinutesOfDay()
+    );
+    dateStr = nextShiftAndDate(liveDateStr, liveShift).dateStr;
+  }
   const workDate = dateOnlyFromString(dateStr);
   const dayOfWeek = dayOfWeekForDateString(dateStr);
   const shiftFilter: ShiftFilter = parseShiftFilter(typeof sp.shift === "string" ? sp.shift : undefined);
