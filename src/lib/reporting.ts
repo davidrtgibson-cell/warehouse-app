@@ -31,7 +31,27 @@ export type ReportRow = {
   isPaid: boolean;
   firstTaskStart: Date;
   lastTaskFinish: Date;
-  rawTaskMinutes: number;
+  // Per-TASK figures — genuinely additive. Summing taskNetMinutes across
+  // one employee's rows for a single workDate+shift reproduces that
+  // shift's own netWorkedMinutes exactly (break deduction is allocated
+  // per-task by sumDeductionsByTask/break-rules.ts and never exceeds a
+  // task's own gross minutes, so taskNetMinutes is never clamped in
+  // practice — see computeEmployeeBreakAllocation's doc comment). These
+  // are the columns reportRowsToCsv exports; safe to sum in a pivot table.
+  taskGrossMinutes: number;
+  taskBreakMinutes: number;
+  taskNetMinutes: number;
+  // Shift-level totals — the SAME value repeated on every task row for a
+  // given employee+workDate+shift (this is the one place in this file
+  // where the data is genuinely denormalised). Do NOT sum these across a
+  // person's task rows — dedupe by employee+workDate+shift first, e.g. via
+  // summarizeByPerson below, which the on-screen "By team member" view and
+  // its Stat totals both already do. Deliberately EXCLUDED from
+  // reportRowsToCsv's output for exactly this reason: a flat CSV with a
+  // repeated dimension-level column is a pivot-table footgun (naively
+  // summing "Net worked hours" across someone's 3 task rows would triple
+  // their real shift hours). Kept on the row only because summarizeByPerson
+  // needs them.
   grossShiftMinutes: number;
   unpaidBreakMinutes: number;
   netWorkedMinutes: number;
@@ -43,10 +63,9 @@ export type ReportRow = {
 // numbers for the same filters.
 //
 // Row grain is (employee, workDate, shift, task) — one row per task someone
-// touched during their shift, plus that shift's own gross/break/net columns
-// repeated on every one of that shift's rows (a standard denormalised
-// export shape: sum rawTaskMinutes to get task totals, dedupe by
-// workDate+shift+employee to get shift-level totals).
+// touched during their shift. See ReportRow's own doc comment above for
+// which fields are safe to sum across a person's rows (taskGross/Break/Net)
+// versus which are shift-level and repeated (grossShiftMinutes and friends).
 //
 // Gross hours here are each employee's WHOLE shift, uncapped — unlike the
 // live board's clampToWindow model, which deliberately splits a movement
@@ -172,7 +191,9 @@ export async function buildLaborReportRows(filters: ReportFilters): Promise<Repo
         isPaid: task.isPaid,
         firstTaskStart: task.firstStart,
         lastTaskFinish: task.lastFinish,
-        rawTaskMinutes: Math.max(0, task.rawMinutes - deduction),
+        taskGrossMinutes: task.rawMinutes,
+        taskBreakMinutes: deduction,
+        taskNetMinutes: Math.max(0, task.rawMinutes - deduction),
         grossShiftMinutes: grossMinutes,
         unpaidBreakMinutes: breakMinutes,
         netWorkedMinutes: netMinutes,
@@ -195,6 +216,15 @@ function csvField(value: string | number): string {
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
+// Deliberately only per-task (taskGross/Break/NetMinutes) columns here, not
+// the shift-level grossShiftMinutes/unpaidBreakMinutes/netWorkedMinutes on
+// ReportRow — those repeat per row and would silently inflate if summed in
+// a pivot table (a real KPI-reporting bug: someone with 3 task rows in an
+// 8h/7.5h-net shift would pivot-sum to 24h gross / 22.5h net). Every column
+// below is safe to sum: grouping this CSV by employee+work date+shift and
+// summing "Task net hours" reproduces that shift's real net worked hours
+// exactly, because break deduction is allocated per-task (see
+// ReportRow's own doc comment) rather than repeated whole.
 const CSV_HEADERS = [
   "Work date",
   "Shift",
@@ -208,11 +238,11 @@ const CSV_HEADERS = [
   "Paid",
   "First task start",
   "Last task finish",
-  "Raw task minutes",
-  "Raw task hours",
-  "Gross shift hours",
-  "Unpaid break minutes",
-  "Net worked hours",
+  "Task gross minutes",
+  "Task gross hours",
+  "Task break minutes",
+  "Task net minutes",
+  "Task net hours",
 ];
 
 export function reportRowsToCsv(rows: ReportRow[]): string {
@@ -232,11 +262,11 @@ export function reportRowsToCsv(rows: ReportRow[]): string {
         row.isPaid ? "Yes" : "No",
         fmtTimeSydney(row.firstTaskStart),
         fmtTimeSydney(row.lastTaskFinish),
-        row.rawTaskMinutes,
-        (row.rawTaskMinutes / 60).toFixed(2),
-        (row.grossShiftMinutes / 60).toFixed(2),
-        row.unpaidBreakMinutes,
-        (row.netWorkedMinutes / 60).toFixed(2),
+        row.taskGrossMinutes,
+        (row.taskGrossMinutes / 60).toFixed(2),
+        row.taskBreakMinutes,
+        row.taskNetMinutes,
+        (row.taskNetMinutes / 60).toFixed(2),
       ]
         .map(csvField)
         .join(",")
@@ -247,10 +277,12 @@ export function reportRowsToCsv(rows: ReportRow[]): string {
 
 // Small on-screen summary helpers — group the same rows by task or by
 // person for the preview toggle on /reports, without a second DB query.
+// Sums taskNetMinutes (per-task, already net of that task's own break
+// share) — safe to sum across rows/people, unlike the shift-level fields.
 export function summarizeByTask(rows: ReportRow[]) {
   const map = new Map<
     string,
-    { taskName: string; category: TaskCategory; isPaid: boolean; people: Set<string>; rawMinutes: number }
+    { taskName: string; category: TaskCategory; isPaid: boolean; people: Set<string>; netMinutes: number }
   >();
   for (const row of rows) {
     const entry = map.get(row.taskName) ?? {
@@ -258,15 +290,15 @@ export function summarizeByTask(rows: ReportRow[]) {
       category: row.category,
       isPaid: row.isPaid,
       people: new Set(),
-      rawMinutes: 0,
+      netMinutes: 0,
     };
     entry.people.add(row.employeeCode);
-    entry.rawMinutes += row.rawTaskMinutes;
+    entry.netMinutes += row.taskNetMinutes;
     map.set(row.taskName, entry);
   }
   return Array.from(map.values())
-    .map((e) => ({ taskName: e.taskName, category: e.category, isPaid: e.isPaid, peopleCount: e.people.size, rawMinutes: e.rawMinutes }))
-    .sort((a, b) => b.rawMinutes - a.rawMinutes);
+    .map((e) => ({ taskName: e.taskName, category: e.category, isPaid: e.isPaid, peopleCount: e.people.size, netMinutes: e.netMinutes }))
+    .sort((a, b) => b.netMinutes - a.netMinutes);
 }
 
 export function summarizeByPerson(rows: ReportRow[]) {
@@ -275,7 +307,7 @@ export function summarizeByPerson(rows: ReportRow[]) {
   const shiftSeen = new Set<string>();
   const map = new Map<
     string,
-    { employeeName: string; employeeCode: string; grossMinutes: number; breakMinutes: number; netMinutes: number; rawMinutes: number }
+    { employeeName: string; employeeCode: string; grossMinutes: number; breakMinutes: number; netMinutes: number }
   >();
   for (const row of rows) {
     const entry = map.get(row.employeeCode) ?? {
@@ -284,9 +316,7 @@ export function summarizeByPerson(rows: ReportRow[]) {
       grossMinutes: 0,
       breakMinutes: 0,
       netMinutes: 0,
-      rawMinutes: 0,
     };
-    entry.rawMinutes += row.rawTaskMinutes;
     const shiftKey = `${row.employeeCode}:${row.workDate}:${row.shift}`;
     if (!shiftSeen.has(shiftKey)) {
       shiftSeen.add(shiftKey);
