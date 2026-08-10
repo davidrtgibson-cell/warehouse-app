@@ -11,9 +11,9 @@
 1. **Reporting: report builder.** Already flagged as a deliberate "nice to have, later" when phase 5 shipped
    — a UI to pick your own columns/groupings/filters rather than the fixed by-task/by-person views. Worth
    revisiting once there's a sense of what shapes people actually reach for in the current `/reports`.
-3. **User manual / help function.** Lowest priority — most valuable once the feature set and UI settle down
+2. **User manual / help function.** Lowest priority — most valuable once the feature set and UI settle down
    more, so it doesn't need constant rewriting.
-4. **Still open: fully consolidate Team members + Standard Roster into one screen? (2026-08-10)** The
+3. **Still open: fully consolidate Team members + Standard Roster into one screen? (2026-08-10)** The
    dead-end (creating a new perm/part-time employee had no path into Standard Roster) is now fixed —
    `createEmployeeAction` prompts the same "set up their pattern →" banner an existing temp→perm
    conversion already gets, linking straight to their prefiltered Standard Roster row. What's left is
