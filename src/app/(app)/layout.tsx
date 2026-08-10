@@ -38,14 +38,14 @@ export default async function AppLayout({ children }: LayoutProps<"/">) {
           style={branding.accentColor ? { backgroundColor: branding.accentColor } : undefined}
           className={
             branding.accentColor
-              ? "flex items-center px-4 py-4"
-              : "border-b border-zinc-200 px-4 py-4 dark:border-zinc-800"
+              ? "flex items-center px-4 py-3"
+              : "border-b border-zinc-200 px-4 py-3 dark:border-zinc-800"
           }
         >
           <Link href="/" className={branding.accentColor ? "text-sm font-semibold text-white hover:underline" : "text-sm font-semibold hover:underline"}>
             {branding.logoPath ? (
               // eslint-disable-next-line @next/next/no-img-element -- admin-uploaded file on disk, not a static/optimizable asset
-              <img src={branding.logoPath} alt="Warehouse App" className="h-8 w-auto" />
+              <img src={branding.logoPath} alt="Warehouse App" className="h-12 w-auto max-w-full object-contain" />
             ) : (
               "Warehouse App"
             )}

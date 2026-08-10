@@ -5,7 +5,11 @@ test.describe("login", () => {
   test("unauthenticated visitor is redirected to /login", async ({ page }) => {
     await page.goto("/");
     await expect(page).toHaveURL(/\/login$/);
-    await expect(page.getByRole("heading", { name: "Warehouse App" })).toBeVisible();
+    // Not the "Warehouse App" heading — Settings > Branding can replace it
+    // with an uploaded logo (src/app/login/page.tsx), so it isn't always
+    // present. The email/password fields are unconditional.
+    await expect(page.getByLabel("Email")).toBeVisible();
+    await expect(page.getByLabel("Password")).toBeVisible();
   });
 
   test("rejects the wrong password", async ({ page }) => {
