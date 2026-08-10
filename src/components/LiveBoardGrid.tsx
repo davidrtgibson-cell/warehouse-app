@@ -438,6 +438,7 @@ export function LiveBoardGrid({
         />
         <span className="text-xs text-zinc-500">{selected.size} selected</span>
         <select
+          aria-label="Move selected to"
           value={moveTarget}
           onChange={(e) => setMoveTarget(e.target.value)}
           disabled={disabled}
@@ -557,6 +558,7 @@ export function LiveBoardGrid({
                     >
                       <input
                         type="checkbox"
+                        aria-label={`Select ${entry.firstName} ${entry.lastName}`}
                         checked={selected.has(entry.dailyRosterId)}
                         disabled={disabled}
                         onChange={() => toggle(entry.dailyRosterId)}

@@ -15,9 +15,5 @@
    "Warehouse App" wordmark at the top, per Tier 4 #10, is the natural spot for a logo now — the old
    top-nav-bar framing of this item is stale). Mostly cosmetic/white-labelling; matches the "build for
    scalability, even potential sale" goal but doesn't block anything functional.
-3. **Test framework — Playwright for UI/end-to-end.** Vitest is done (`npm test`; 47 unit tests over
-   `break-rules.ts`/`schedule.ts`/`board-time.ts`, the pure functions flagged as ideal targets — see
-   `git log`). Still nothing covering the app end-to-end (login, roster build/finalise, live board moves,
-   Settings CRUD) beyond this session's own manual browser checks each time.
-4. **User manual / help function.** Lowest priority — most valuable once the feature set and UI settle down
+3. **User manual / help function.** Lowest priority — most valuable once the feature set and UI settle down
    more, so it doesn't need constant rewriting.
