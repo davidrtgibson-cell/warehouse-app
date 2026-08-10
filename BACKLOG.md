@@ -8,15 +8,10 @@
 
 ## Tier 5 — Growth / polish
 
-1. **Reporting: report builder.** Already flagged as a deliberate "nice to have, later" when phase 5 shipped
-   — a UI to pick your own columns/groupings/filters rather than the fixed by-task/by-person views. Worth
-   revisiting once there's a sense of what shapes people actually reach for in the current `/reports`.
-2. **User manual / help function.** Lowest priority — most valuable once the feature set and UI settle down
-   more, so it doesn't need constant rewriting.
-3. **Still open: fully consolidate Team members + Standard Roster into one screen? (2026-08-10)** The
-   dead-end (creating a new perm/part-time employee had no path into Standard Roster) is now fixed —
-   `createEmployeeAction` prompts the same "set up their pattern →" banner an existing temp→perm
-   conversion already gets, linking straight to their prefiltered Standard Roster row. What's left is
-   the bigger question the fix deliberately didn't answer: keep these as two linked pages (what exists
-   now) or merge into one combined employee+pattern screen. Lower priority than it looked — the linked-page
-   version already closes the actual workflow gap.
+1. **Reporting: report builder — parked (2026-08-10).** Explicitly deferred past this tier: more useful
+   once real productivity volumes are integrated for KPI reporting, so a pick-your-own-columns UI has
+   actual volume-based metrics worth including, not just the current fixed by-task/by-person hours views.
+   Revisit once volumes integration is in scope.
+
+Team members + Standard Roster consolidation: decided against (2026-08-10) — staying as two linked
+pages, the existing "set up their pattern →" prompt already closes the actual workflow gap.
