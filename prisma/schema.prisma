@@ -98,8 +98,9 @@ enum ExceptionType {
 // that "processed by" / "changed by" columns reference everywhere else.
 // passwordHash is "salt:hash" hex via Node's crypto.scrypt (see
 // src/lib/password.ts) — never plaintext, no external hashing dependency.
-// Role-based authorization (what a LEADER vs ADMIN can/can't do) doesn't
-// exist yet — role is tracked but not yet enforced anywhere; see BACKLOG.md.
+// Role-based authorization: requireAdmin() (src/lib/auth.ts) gates every
+// Settings screen/action to ADMIN; day-to-day roster/board actions stay on
+// requireCurrentUser(), open to any signed-in LEADER or ADMIN.
 model User {
   id           String   @id @default(cuid())
   name         String
