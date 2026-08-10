@@ -11,10 +11,6 @@
 1. **Reporting: report builder.** Already flagged as a deliberate "nice to have, later" when phase 5 shipped
    — a UI to pick your own columns/groupings/filters rather than the fixed by-task/by-person views. Worth
    revisiting once there's a sense of what shapes people actually reach for in the current `/reports`.
-2. **Style/branding settings** — company colour codes + logo, applied through the UI (the side nav's
-   "Warehouse App" wordmark at the top, per Tier 4 #10, is the natural spot for a logo now — the old
-   top-nav-bar framing of this item is stale). Mostly cosmetic/white-labelling; matches the "build for
-   scalability, even potential sale" goal but doesn't block anything functional.
 3. **User manual / help function.** Lowest priority — most valuable once the feature set and UI settle down
    more, so it doesn't need constant rewriting.
 4. **Still open: fully consolidate Team members + Standard Roster into one screen? (2026-08-10)** The
