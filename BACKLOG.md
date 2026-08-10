@@ -17,10 +17,10 @@
    scalability, even potential sale" goal but doesn't block anything functional.
 3. **User manual / help function.** Lowest priority — most valuable once the feature set and UI settle down
    more, so it doesn't need constant rewriting.
-4. **New employee → prompt to build their Standard Roster; maybe consolidate the two pages (2026-08-10).**
-   Adding a PERMANENT or PART_TIME employee via Settings > Employees today is a dead end for actually
-   rostering them — Standard Roster is a fully separate page/flow with zero link between the two. Should
-   at minimum prompt/redirect into Standard Roster right after creating one of these employee types (CASUAL/
-   AGENCY/CONTRACTOR don't need one). Open design question before building: a prompt/link between the two
-   existing pages, or an actual merge into one combined employee+pattern screen — worth deciding deliberately
-   rather than defaulting to whichever's less work.
+4. **Still open: fully consolidate Team members + Standard Roster into one screen? (2026-08-10)** The
+   dead-end (creating a new perm/part-time employee had no path into Standard Roster) is now fixed —
+   `createEmployeeAction` prompts the same "set up their pattern →" banner an existing temp→perm
+   conversion already gets, linking straight to their prefiltered Standard Roster row. What's left is
+   the bigger question the fix deliberately didn't answer: keep these as two linked pages (what exists
+   now) or merge into one combined employee+pattern screen. Lower priority than it looked — the linked-page
+   version already closes the actual workflow gap.
