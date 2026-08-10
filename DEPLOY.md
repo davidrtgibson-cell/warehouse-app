@@ -64,7 +64,9 @@ re-run that installer.
 
 ## Step 2 — Get the code onto the server PC
 
-Pick a simple location, e.g. `C:\Apps`. In PowerShell:
+Pick a simple location, e.g. `C:\Apps`. Two ways to do this — use whichever fits your work network.
+
+**Option A — `git clone` (needs the work PC to reach github.com):**
 
 ```powershell
 New-Item -ItemType Directory -Force C:\Apps
@@ -75,6 +77,30 @@ Set-Location C:\Apps\warehouse-app
 
 The first `git clone` will ask you to sign in to GitHub in a browser window that pops up — sign in
 with your normal GitHub account.
+
+**Option B — copy a zip file across (no GitHub access needed at all):**
+
+Everything git tracks — the app's source code, not its dependencies — packages down to well under 1 MB,
+small enough for a USB stick, a network share, or even email. On the dev machine this is produced with:
+
+```powershell
+git archive --format=zip -o warehouse-app-source.zip HEAD
+```
+
+Copy that zip to the server PC by whatever means your network allows (USB drive is simplest), then:
+
+```powershell
+New-Item -ItemType Directory -Force C:\Apps\warehouse-app
+Expand-Archive -Path "<path to the zip you copied over>" -DestinationPath C:\Apps\warehouse-app
+Set-Location C:\Apps\warehouse-app
+```
+
+> **One thing to check either way:** the very next step (`npm install`) still needs the server PC to
+> reach the **npm registry** (`npmjs.org`) to download the app's dependency code — that's a different,
+> much more commonly-allowed address than GitHub, so it's usually fine even on a locked-down network,
+> but confirm it before relying on this. If the server PC genuinely has **no internet access at all**,
+> say so and a different, fully self-contained package (with dependencies already included — a few
+> hundred MB instead of under 1 MB) is the way to go instead.
 
 Now download the app's own dependency code (the `node_modules` folder mentioned above — this step is
 what rebuilds it fresh, rather than copying it):
