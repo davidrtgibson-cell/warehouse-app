@@ -44,6 +44,8 @@ function AddPlannedLeaveForm({
     return employees.filter((e) => `${e.employeeCode} ${e.firstName} ${e.lastName}`.toLowerCase().includes(q)).slice(0, 20);
   }, [employees, search]);
 
+  const selectedEmployee = employees.find((e) => e.id === employeeId) ?? null;
+
   if (!open) {
     return (
       <button
@@ -84,33 +86,54 @@ function AddPlannedLeaveForm({
     <div className="flex flex-col gap-2 rounded border border-zinc-300 bg-zinc-50 p-3 dark:border-zinc-700 dark:bg-zinc-900">
       <label className="text-xs text-zinc-500">
         Employee
-        <input
-          type="text"
-          placeholder="Search name or code…"
-          value={search}
-          disabled={isPending}
-          onChange={(e) => {
-            setSearch(e.target.value);
-            setEmployeeId("");
-          }}
-          className={`${fieldClass()} mt-0.5 block w-full`}
-        />
+        {selectedEmployee ? (
+          <div className="mt-0.5 flex items-center justify-between gap-2 rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-950">
+            <span>
+              {selectedEmployee.firstName} {selectedEmployee.lastName}{" "}
+              <span className="font-mono text-xs text-zinc-500">{selectedEmployee.employeeCode}</span>
+            </span>
+            <button
+              type="button"
+              disabled={isPending}
+              onClick={() => setEmployeeId("")}
+              className="text-xs text-zinc-500 hover:underline disabled:cursor-not-allowed"
+            >
+              Change
+            </button>
+          </div>
+        ) : (
+          <input
+            type="text"
+            placeholder="Search name or code…"
+            value={search}
+            disabled={isPending}
+            onChange={(e) => setSearch(e.target.value)}
+            className={`${fieldClass()} mt-0.5 block w-full`}
+          />
+        )}
       </label>
-      {search && (
-        <select
-          size={Math.min(6, Math.max(2, filteredEmployees.length))}
-          value={employeeId}
-          disabled={isPending}
-          onChange={(e) => setEmployeeId(e.target.value)}
-          className={`${fieldClass()} w-full`}
-        >
-          {filteredEmployees.length === 0 && <option disabled>No matches</option>}
-          {filteredEmployees.map((e) => (
-            <option key={e.id} value={e.id}>
-              {e.firstName} {e.lastName} ({e.employeeCode})
-            </option>
-          ))}
-        </select>
+      {!selectedEmployee && search && (
+        <div className="max-h-48 overflow-y-auto rounded border border-zinc-300 dark:border-zinc-700">
+          {filteredEmployees.length === 0 ? (
+            <div className="px-2 py-1.5 text-sm text-zinc-500">No matches</div>
+          ) : (
+            filteredEmployees.map((e) => (
+              <button
+                key={e.id}
+                type="button"
+                disabled={isPending}
+                onClick={() => {
+                  setEmployeeId(e.id);
+                  setSearch("");
+                }}
+                className="block w-full px-2 py-1.5 text-left text-sm hover:bg-zinc-100 disabled:cursor-not-allowed dark:hover:bg-zinc-800"
+              >
+                {e.firstName} {e.lastName}{" "}
+                <span className="font-mono text-xs text-zinc-500">({e.employeeCode})</span>
+              </button>
+            ))
+          )}
+        </div>
       )}
       <div className="grid grid-cols-3 gap-2">
         <label className="text-xs text-zinc-500">
