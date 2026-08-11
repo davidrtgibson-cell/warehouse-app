@@ -3,14 +3,17 @@
 import Link from "next/link";
 import { useMemo, useState, useTransition } from "react";
 import {
+  bulkUploadEmployeesAction,
   createEmployeeAction,
   setEmployeeActiveAction,
   updateEmployeeAction,
+  type BulkUploadEmployeesResult,
   type EmployeeInput,
 } from "@/lib/actions/employees";
 import { isNewPermOrPartTime, isTempToPermConversion } from "@/lib/employee-rules";
 import { EmploymentType, Shift } from "@/generated/prisma/enums";
 import { formatEmploymentType } from "@/lib/roster-display";
+import { csvCell, downloadCsvFile } from "@/lib/csv-download";
 
 export type EmployeeRow = {
   id: string;
@@ -29,6 +32,9 @@ export type DepartmentOption = { id: string; name: string };
 
 const EMPLOYMENT_TYPE_OPTIONS = Object.values(EmploymentType);
 const SHIFT_OPTIONS = Object.values(Shift);
+
+const CSV_TEMPLATE_HEADER = "Employee Code,First Name,Last Name,Employment Type,Agency,Department,Default Shift";
+const CSV_EXAMPLE = "EMP-0001,Jane,Smith,PERMANENT,,Inbound,AM";
 
 function fieldClass() {
   return "mt-0.5 block w-full rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-950";
@@ -206,12 +212,168 @@ function StatusBanner({
   );
 }
 
+// Mirrors StandardRosterGrid.tsx's BulkUploadPanel exactly — same paste-or-
+// file-upload input, same Preview-then-Confirm two-step (the client is
+// never trusted with previously-parsed rows; commit re-parses from the raw
+// text). Crucial for initial rollout: setting up 150+ real employees
+// one-by-one through the modal above isn't realistic.
+function BulkUploadEmployeesPanel({ disabled, onApplied }: { disabled: boolean; onApplied: () => void }) {
+  const [rawText, setRawText] = useState("");
+  const [result, setResult] = useState<BulkUploadEmployeesResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [isPending, startTransition] = useTransition();
+
+  function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => setRawText(String(reader.result ?? ""));
+    reader.readAsText(file);
+    e.target.value = "";
+  }
+
+  function preview() {
+    setError(null);
+    startTransition(async () => {
+      try {
+        const r = await bulkUploadEmployeesAction(rawText, false);
+        setResult(r);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to preview upload");
+      }
+    });
+  }
+
+  function confirmUpload() {
+    setError(null);
+    startTransition(async () => {
+      try {
+        const r = await bulkUploadEmployeesAction(rawText, true);
+        setResult(r);
+        onApplied();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to apply upload");
+      }
+    });
+  }
+
+  const needsStandardRosterCount = result?.rows.filter((r) => r.status === "ok" && r.needsStandardRoster).length ?? 0;
+
+  return (
+    <div className="space-y-3 rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+      <div>
+        <h2 className="text-sm font-semibold">Bulk upload</h2>
+        <p className="mt-1 text-xs text-zinc-500">
+          Paste tab-separated cells copied straight from Excel/Sheets, or upload a CSV file, with columns:{" "}
+          <code className="rounded bg-zinc-100 px-1 py-0.5 dark:bg-zinc-900">{CSV_TEMPLATE_HEADER}</code>. Example
+          row: <code className="rounded bg-zinc-100 px-1 py-0.5 dark:bg-zinc-900">{CSV_EXAMPLE}</code>. Agency only
+          matters for Agency employment type; Department and Default shift can be left blank. Matched by Employee
+          Code — an existing code updates that person, a new one creates them. Doesn&apos;t activate/deactivate
+          anyone; that stays its own action.
+        </p>
+      </div>
+
+      <textarea
+        rows={8}
+        value={rawText}
+        disabled={isPending}
+        onChange={(e) => setRawText(e.target.value)}
+        placeholder={`${CSV_TEMPLATE_HEADER}\n${CSV_EXAMPLE}`}
+        className="w-full rounded border border-zinc-300 bg-white p-2 font-mono text-xs dark:border-zinc-700 dark:bg-zinc-950"
+      />
+
+      <div className="flex flex-wrap items-center gap-2">
+        <input type="file" accept=".csv,text/csv" disabled={isPending} onChange={handleFile} className="text-xs" />
+        <button
+          type="button"
+          disabled={disabled || isPending || rawText.trim().length === 0}
+          onClick={preview}
+          className="rounded border border-zinc-300 px-3 py-1.5 text-xs font-medium hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-900"
+        >
+          Preview
+        </button>
+        <button
+          type="button"
+          disabled={disabled || isPending || !result || result.committed || result.validCount === 0}
+          onClick={confirmUpload}
+          className="rounded border border-emerald-400 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-800 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-200"
+        >
+          Confirm upload
+        </button>
+        {result && (
+          <span className="text-xs text-zinc-500">
+            {result.validCount} OK · {result.errorCount} error{result.errorCount === 1 ? "" : "s"}
+            {result.committed && " · applied"}
+          </span>
+        )}
+      </div>
+
+      {error && <div className="text-xs text-red-600">{error}</div>}
+
+      {result?.committed && needsStandardRosterCount > 0 && (
+        <div className="rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
+          {needsStandardRosterCount} new/converted permanent or part-time employee
+          {needsStandardRosterCount === 1 ? "" : "s"} from this upload {needsStandardRosterCount === 1 ? "has" : "have"}{" "}
+          no Standard Roster pattern yet (marked below).{" "}
+          <Link href="/settings/standard-roster" className="underline">
+            Set them up →
+          </Link>
+        </div>
+      )}
+
+      {result && result.rows.length > 0 && (
+        <div className="max-h-64 overflow-auto rounded border border-zinc-200 dark:border-zinc-800">
+          <table className="w-full text-left text-xs">
+            <thead className="sticky top-0 bg-zinc-100 uppercase text-zinc-500 dark:bg-zinc-900">
+              <tr>
+                <th className="px-2 py-1">Line</th>
+                <th className="px-2 py-1">Employee</th>
+                <th className="px-2 py-1">Type</th>
+                <th className="px-2 py-1">Department</th>
+                <th className="px-2 py-1">Shift</th>
+                <th className="px-2 py-1">Status</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
+              {result.rows.map((r) => (
+                <tr key={r.line} className={r.status === "error" ? "bg-red-50 dark:bg-red-950/40" : "bg-white dark:bg-zinc-950"}>
+                  <td className="px-2 py-1">{r.line}</td>
+                  <td className="px-2 py-1">
+                    {r.employeeName || r.employeeCode}
+                    {r.employeeName && r.employeeCode && (
+                      <span className="ml-1 font-mono text-zinc-500">({r.employeeCode})</span>
+                    )}
+                  </td>
+                  <td className="px-2 py-1">{r.employmentType}</td>
+                  <td className="px-2 py-1">{r.departmentName || "—"}</td>
+                  <td className="px-2 py-1">{r.defaultShift || "—"}</td>
+                  <td className="px-2 py-1">
+                    {r.status === "ok" ? (
+                      <span className="text-emerald-700 dark:text-emerald-400">
+                        {r.isNew ? "New" : "Update"}
+                        {r.needsStandardRoster && " · needs Standard Roster"}
+                      </span>
+                    ) : (
+                      <span className="text-red-700 dark:text-red-400">{r.error}</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function EmployeeManagementGrid({ employees, departments }: { employees: EmployeeRow[]; departments: DepartmentOption[] }) {
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState("ALL");
   const [statusFilter, setStatusFilter] = useState<"ACTIVE" | "INACTIVE" | "ALL">("ACTIVE");
   const [editing, setEditing] = useState<EmployeeRow | null | "NEW">(null);
   const [conversionBanner, setConversionBanner] = useState<{ employeeCode: string; name: string } | null>(null);
+  const [showUpload, setShowUpload] = useState(false);
   const [isPending, startTransition] = useTransition();
   const [rowMessage, setRowMessage] = useState<{ id: string; text: string } | null>(null);
 
@@ -235,6 +397,23 @@ export function EmployeeManagementGrid({ employees, departments }: { employees: 
         setRowMessage({ id: employee.id, text: err instanceof Error ? err.message : "Failed to update" });
       }
     });
+  }
+
+  function downloadCsv() {
+    const lines = employees.map((e) =>
+      [
+        e.employeeCode,
+        e.firstName,
+        e.lastName,
+        e.employmentType,
+        e.agencyName ?? "",
+        e.departmentName ?? "",
+        e.defaultShift ?? "",
+      ]
+        .map(csvCell)
+        .join(",")
+    );
+    downloadCsvFile("team-members.csv", [CSV_TEMPLATE_HEADER, ...lines].join("\n"));
   }
 
   return (
@@ -271,14 +450,32 @@ export function EmployeeManagementGrid({ employees, departments }: { employees: 
           <option value="ALL">All</option>
         </select>
         <span className="text-xs text-zinc-500">{filtered.length} of {employees.length}</span>
-        <button
-          type="button"
-          onClick={() => setEditing("NEW")}
-          className="ml-auto rounded border border-zinc-300 px-3 py-1.5 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-900"
-        >
-          + Add team member
-        </button>
+        <div className="ml-auto flex items-center gap-2">
+          <button
+            type="button"
+            onClick={downloadCsv}
+            className="rounded border border-zinc-300 px-3 py-1.5 text-xs hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-900"
+          >
+            Download current team (CSV)
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowUpload((v) => !v)}
+            className="rounded border border-zinc-300 px-3 py-1.5 text-xs font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-900"
+          >
+            {showUpload ? "Hide bulk upload" : "Bulk upload"}
+          </button>
+          <button
+            type="button"
+            onClick={() => setEditing("NEW")}
+            className="rounded border border-zinc-300 px-3 py-1.5 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-900"
+          >
+            + Add team member
+          </button>
+        </div>
       </div>
+
+      {showUpload && <BulkUploadEmployeesPanel disabled={isPending} onApplied={() => setShowUpload(false)} />}
 
       <div className="overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-800">
         <table className="w-full text-left text-sm">

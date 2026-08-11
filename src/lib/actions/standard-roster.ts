@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth";
 import { DATE_RE, parseTimeString, timeValueFromHoursMinutes, todaySydneyDateString } from "@/lib/schedule";
 import { addDaysToDateString, dateOnlyFromString, toDateOnlyString } from "@/lib/format";
+import { parseCsvRows } from "@/lib/csv-parse";
 import { DayOfWeek, Prisma, Shift, TaskCategory } from "@/generated/prisma/client";
 
 type TxClient = Prisma.TransactionClient;
@@ -274,22 +275,6 @@ export type BulkUploadResult = {
 
 const EXPECTED_COLUMNS = 7;
 
-function splitLine(line: string): string[] {
-  const delimiter = line.includes("\t") ? "\t" : ",";
-  return line.split(delimiter).map((cell) => cell.trim().replace(/^"(.*)"$/, "$1"));
-}
-
-function parseRawRows(rawText: string): string[][] {
-  const lines = rawText
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter((l) => l.length > 0);
-  if (lines.length === 0) return [];
-  const rows = lines.map(splitLine);
-  if (rows[0][0]?.toLowerCase() === "employee code") return rows.slice(1);
-  return rows;
-}
-
 function errorRow(line: number, cells: string[], error: string): BulkUploadRowResult {
   return {
     line,
@@ -316,7 +301,7 @@ export async function bulkUploadStandardRosterAction(
   if (!DATE_RE.test(effectiveFromStr)) throw new Error("Invalid effective-from date");
   const effectiveFrom = dateOnlyFromString(effectiveFromStr);
 
-  const rawRows = parseRawRows(rawText);
+  const rawRows = parseCsvRows(rawText, "Employee Code");
   if (rawRows.length === 0) throw new Error("No rows to upload");
 
   const [employees, tasks, openRows] = await Promise.all([

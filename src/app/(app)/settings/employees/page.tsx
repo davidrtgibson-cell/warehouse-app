@@ -45,7 +45,9 @@ export default async function EmployeesSettingsPage() {
             Deactivating someone removes them from the roster builder and casual pool; every past roster
             row they&apos;re already on stays intact. Adding a new perm/part-time team member, or moving
             someone from casual/agency/contractor to perm/part-time, prompts setting up their Standard
-            Roster pattern, since they won&apos;t have one yet.
+            Roster pattern, since they won&apos;t have one yet. Setting up a whole team at once? Use{" "}
+            <span className="font-medium text-zinc-800 dark:text-zinc-200">Bulk upload</span> below rather
+            than adding people one at a time.
           </p>
         </div>
         <EmployeeManagementGrid employees={employees} departments={departments} />

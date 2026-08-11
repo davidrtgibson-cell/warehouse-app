@@ -10,6 +10,7 @@ import {
 } from "@/lib/actions/standard-roster";
 import { DayOfWeek, Shift, type EmploymentType } from "@/generated/prisma/enums";
 import { formatEmploymentType } from "@/lib/roster-display";
+import { csvCell, downloadCsvFile } from "@/lib/csv-download";
 
 export type StandardRosterEmployee = {
   id: string;
@@ -61,20 +62,6 @@ const WEEKDAYS: DayOfWeek[] = [
 
 const CSV_TEMPLATE_HEADER = "Employee Code,Day,Shift,Start,Finish,Paid Hours,Task";
 const CSV_EXAMPLE = `EMP-0001,MONDAY,AM,06:00,14:00,8,GTP Picking`;
-
-function csvCell(value: string) {
-  return value.includes(",") || value.includes('"') ? `"${value.replace(/"/g, '""')}"` : value;
-}
-
-function downloadTextFile(filename: string, contents: string) {
-  const blob = new Blob([contents], { type: "text/csv" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
-}
 
 type EditingCell = {
   employee: StandardRosterEmployee;
@@ -140,7 +127,7 @@ export function StandardRosterGrid({
         .map(csvCell)
         .join(",");
     });
-    downloadTextFile(`standard-roster-${todayStr}.csv`, [CSV_TEMPLATE_HEADER, ...lines].join("\n"));
+    downloadCsvFile(`standard-roster-${todayStr}.csv`, [CSV_TEMPLATE_HEADER, ...lines].join("\n"));
   }
 
   return (
