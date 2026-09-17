@@ -257,6 +257,23 @@ New-NetFirewallRule -DisplayName "Warehouse App" -Direction Inbound -Protocol TC
 
 ## Updating the app later
 
+> **Deploying the 2026-09-18 update specifically:** this one includes a database migration and two
+> Settings changes, so after the normal update steps below, also do this — a one-time addendum, safe
+> to ignore on any later update:
+> - **Settings > Shift hours** will show real AM/PM/NIGHT times for the first time instead of
+>   `00:00–00:00` (a missing default this update fixes — see below) — check they match your actual
+>   shift hours and adjust if not; the migration fills in generic placeholders (06:00–14:00 /
+>   14:00–22:00 / 22:00–06:00), not your real ones.
+> - This fixes **Live board, Build roster, and Reports** all showing "This page couldn't load" — that
+>   was the missing Shift hours rows above; no separate fix needed once you've done the update steps.
+> - **Settings > Tasks** is now **Settings > Departments & tasks** — set up your departments first
+>   (the "+ Add department" button at the top), then open each existing task via **Edit** and assign
+>   it a department (now required for every task, and needed for the new department-level view on
+>   Reports). Until you do, that task shows "No department" and its hours land in reporting's
+>   "No department" bucket instead of a real one.
+> - Everyone now has a **Change password** link (bottom-left, under their name) to change their own
+>   password without needing an admin to reset it.
+
 When new features land (pushed to GitHub), bringing them onto the server PC is much shorter than the
 initial setup. Run the **entire** sequence below in **one** PowerShell window opened **as Administrator**
 (right-click PowerShell in the Start menu → "Run as administrator") — `Stop-Service`/`Start-Service`
