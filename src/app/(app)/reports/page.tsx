@@ -9,7 +9,7 @@ import {
   todaySydneyDateString,
 } from "@/lib/schedule";
 import { formatDuration } from "@/lib/board-time";
-import { buildLaborReportRows, summarizeByPerson, summarizeByTask } from "@/lib/reporting";
+import { buildLaborReportRows, summarizeByDepartment, summarizeByPerson, summarizeByTask } from "@/lib/reporting";
 import { EmploymentType, Shift, TaskCategory } from "@/generated/prisma/client";
 
 export const dynamic = "force-dynamic";
@@ -61,12 +61,13 @@ export default async function ReportsPage(props: PageProps<"/reports">) {
   const employeeId = str(sp.employeeId);
   const taskId = str(sp.taskId);
   const departmentId = str(sp.departmentId);
+  const taskDepartmentId = str(sp.taskDepartmentId);
   const employmentType = str(sp.employmentType) as EmploymentType | undefined;
   const agencyName = str(sp.agencyName);
-  const view = str(sp.view) === "person" ? "person" : "task";
+  const view = str(sp.view) === "person" ? "person" : str(sp.view) === "department" ? "department" : "task";
 
   const [rows, employees, tasks, departments, agencies] = await Promise.all([
-    buildLaborReportRows({ from, to, shift, employeeId, taskId, departmentId, employmentType, agencyName }),
+    buildLaborReportRows({ from, to, shift, employeeId, taskId, departmentId, taskDepartmentId, employmentType, agencyName }),
     prisma.employee.findMany({ orderBy: [{ lastName: "asc" }, { firstName: "asc" }] }),
     prisma.task.findMany({ orderBy: { sortOrder: "asc" } }),
     prisma.department.findMany({ orderBy: { name: "asc" } }),
@@ -93,6 +94,7 @@ export default async function ReportsPage(props: PageProps<"/reports">) {
 
   const byTaskSummary = summarizeByTask(rows).slice(0, PREVIEW_ROW_CAP);
   const byPersonSummary = perPerson.slice(0, PREVIEW_ROW_CAP);
+  const byDepartmentSummary = summarizeByDepartment(rows).slice(0, PREVIEW_ROW_CAP);
 
   const exportParams = new URLSearchParams();
   exportParams.set("from", from);
@@ -101,6 +103,7 @@ export default async function ReportsPage(props: PageProps<"/reports">) {
   if (employeeId) exportParams.set("employeeId", employeeId);
   if (taskId) exportParams.set("taskId", taskId);
   if (departmentId) exportParams.set("departmentId", departmentId);
+  if (taskDepartmentId) exportParams.set("taskDepartmentId", taskDepartmentId);
   if (employmentType) exportParams.set("employmentType", employmentType);
   if (agencyName) exportParams.set("agencyName", agencyName);
 
@@ -162,6 +165,7 @@ export default async function ReportsPage(props: PageProps<"/reports">) {
               className="rounded border border-zinc-300 bg-white px-2 py-1 dark:border-zinc-700 dark:bg-zinc-950"
             >
               <option value="task">By task</option>
+              <option value="department">By department</option>
               <option value="person">By team member</option>
             </select>
           </label>
@@ -196,7 +200,26 @@ export default async function ReportsPage(props: PageProps<"/reports">) {
             </select>
           </label>
           <label className="flex flex-col gap-1">
-            <span className="text-xs text-zinc-500">Department</span>
+            <span className="text-xs text-zinc-500" title="What department the task itself belongs to — not who's doing it">
+              Task&apos;s department
+            </span>
+            <select
+              name="taskDepartmentId"
+              defaultValue={taskDepartmentId ?? ""}
+              className="rounded border border-zinc-300 bg-white px-2 py-1 dark:border-zinc-700 dark:bg-zinc-950"
+            >
+              <option value="">All departments</option>
+              {departments.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-zinc-500" title="The employee's own nominal department, regardless of what task they worked">
+              Team member&apos;s department
+            </span>
             <select
               name="departmentId"
               defaultValue={departmentId ?? ""}
@@ -275,6 +298,7 @@ export default async function ReportsPage(props: PageProps<"/reports">) {
               <thead className="bg-zinc-100 text-xs uppercase text-zinc-500 dark:bg-zinc-900">
                 <tr>
                   <th className="px-3 py-2">Task</th>
+                  <th className="px-3 py-2">Department</th>
                   <th className="px-3 py-2">Direct/Indirect</th>
                   <th className="px-3 py-2">Paid</th>
                   <th className="px-3 py-2">People</th>
@@ -285,12 +309,36 @@ export default async function ReportsPage(props: PageProps<"/reports">) {
                 {byTaskSummary.map((t) => (
                   <tr key={t.taskName}>
                     <td className="px-3 py-2 font-medium">{t.taskName}</td>
+                    <td className="px-3 py-2 text-zinc-500">{t.taskDepartmentName ?? "—"}</td>
                     <td className="px-3 py-2 text-zinc-500">{categoryLabel(t.category)}</td>
                     <td className="px-3 py-2 text-zinc-500">
                       {t.category === TaskCategory.LEAVE ? (t.isPaid ? "Yes" : "No") : "—"}
                     </td>
                     <td className="px-3 py-2">{t.peopleCount}</td>
                     <td className="px-3 py-2 font-mono">{formatDuration(t.netMinutes)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : view === "department" ? (
+          <div className="overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-800">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-zinc-100 text-xs uppercase text-zinc-500 dark:bg-zinc-900">
+                <tr>
+                  <th className="px-3 py-2">Department</th>
+                  <th className="px-3 py-2">Tasks</th>
+                  <th className="px-3 py-2">People</th>
+                  <th className="px-3 py-2">Net hours</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zinc-200 bg-white dark:divide-zinc-800 dark:bg-zinc-950">
+                {byDepartmentSummary.map((d) => (
+                  <tr key={d.departmentName}>
+                    <td className="px-3 py-2 font-medium">{d.departmentName}</td>
+                    <td className="px-3 py-2">{d.taskCount}</td>
+                    <td className="px-3 py-2">{d.peopleCount}</td>
+                    <td className="px-3 py-2 font-mono">{formatDuration(d.netMinutes)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -322,7 +370,8 @@ export default async function ReportsPage(props: PageProps<"/reports">) {
             </table>
           </div>
         )}
-        {(view === "task" ? byTaskSummary.length : byPersonSummary.length) >= PREVIEW_ROW_CAP && (
+        {(view === "task" ? byTaskSummary.length : view === "department" ? byDepartmentSummary.length : byPersonSummary.length) >=
+          PREVIEW_ROW_CAP && (
           <p className="text-xs text-zinc-500">
             Showing the first {PREVIEW_ROW_CAP} rows — export the CSV for the full set.
           </p>

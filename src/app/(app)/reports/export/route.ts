@@ -26,6 +26,7 @@ export async function GET(request: NextRequest) {
     employeeId: str(sp.get("employeeId")),
     taskId: str(sp.get("taskId")),
     departmentId: str(sp.get("departmentId")),
+    taskDepartmentId: str(sp.get("taskDepartmentId")),
     employmentType: str(sp.get("employmentType")) as EmploymentType | undefined,
     agencyName: str(sp.get("agencyName")),
   });

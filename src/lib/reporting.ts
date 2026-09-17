@@ -11,7 +11,16 @@ export type ReportFilters = {
   shift?: Shift;
   employeeId?: string;
   taskId?: string;
+  // The acting employee's own home department (Employee.departmentId) —
+  // "show me hours for people who nominally belong to Inbound". Kept
+  // distinct from taskDepartmentId below, which is the more meaningful cut
+  // for "how many hours did Inbound's tasks actually consume" — someone
+  // can be home-departed to Inbound and spend the shift on an Order
+  // Fulfilment task, or vice versa.
   departmentId?: string;
+  // The DEPARTMENT THE TASK BELONGS TO (Task.departmentId) — filters rows
+  // by what the work was, not who nominally does it.
+  taskDepartmentId?: string;
   employmentType?: EmploymentType;
   agencyName?: string;
 };
@@ -24,7 +33,16 @@ export type ReportRow = {
   employmentType: EmploymentType;
   agencyName: string | null;
   taskName: string;
-  departmentName: string | null;
+  // The employee's own home department (Employee.departmentId) — who they
+  // nominally belong to, unrelated to what task this row is about.
+  employeeDepartmentName: string | null;
+  // The department THIS TASK belongs to (Task.departmentId) — what
+  // reporting should roll department-level hours up by (see
+  // summarizeByDepartment below), since a person's tasks during a shift
+  // aren't bound by their own nominal department. Null for a task that
+  // hasn't been assigned a department yet (see Task.departmentId's doc
+  // comment in schema.prisma).
+  taskDepartmentName: string | null;
   category: TaskCategory;
   // Only meaningful for LEAVE-category rows (see Task.isPaid's doc comment
   // in schema.prisma) — PRODUCTIVE/INDIRECT tasks are always true.
@@ -108,7 +126,7 @@ export async function buildLaborReportRows(filters: ReportFilters): Promise<Repo
   // (below), but gross/break/net still need every movement for the shift.
   const movements = await prisma.taskMovement.findMany({
     where: { dailyRosterId: { in: dailyRosters.map((r) => r.id) } },
-    include: { task: true },
+    include: { task: { include: { department: true } } },
     orderBy: { startTime: "asc" },
   });
 
@@ -153,7 +171,16 @@ export async function buildLaborReportRows(filters: ReportFilters): Promise<Repo
     // Sub-group this roster row's movements by task for the row-level columns.
     const byTask = new Map<
       string,
-      { taskName: string; category: TaskCategory; isPaid: boolean; firstStart: Date; lastFinish: Date; rawMinutes: number }
+      {
+        taskName: string;
+        taskDepartmentId: string | null;
+        taskDepartmentName: string | null;
+        category: TaskCategory;
+        isPaid: boolean;
+        firstStart: Date;
+        lastFinish: Date;
+        rawMinutes: number;
+      }
     >();
     for (const m of rosterMovements) {
       const effectiveFinish = m.actualFinish ?? m.scheduledFinish;
@@ -166,6 +193,8 @@ export async function buildLaborReportRows(filters: ReportFilters): Promise<Repo
       } else {
         byTask.set(m.taskId, {
           taskName: m.task.name,
+          taskDepartmentId: m.task.departmentId,
+          taskDepartmentName: m.task.department?.name ?? null,
           category: m.task.category,
           isPaid: m.task.isPaid,
           firstStart: m.startTime,
@@ -177,6 +206,7 @@ export async function buildLaborReportRows(filters: ReportFilters): Promise<Repo
 
     for (const [taskId, task] of byTask) {
       if (filters.taskId && filters.taskId !== taskId) continue;
+      if (filters.taskDepartmentId && filters.taskDepartmentId !== task.taskDepartmentId) continue;
       const deduction = deductionByTask.get(taskId) ?? 0;
       rows.push({
         workDate: dateStr,
@@ -186,7 +216,8 @@ export async function buildLaborReportRows(filters: ReportFilters): Promise<Repo
         employmentType: dailyRoster.employee.employmentType,
         agencyName: dailyRoster.employee.agencyName,
         taskName: task.taskName,
-        departmentName: dailyRoster.employee.department?.name ?? null,
+        employeeDepartmentName: dailyRoster.employee.department?.name ?? null,
+        taskDepartmentName: task.taskDepartmentName,
         category: task.category,
         isPaid: task.isPaid,
         firstTaskStart: task.firstStart,
@@ -233,7 +264,8 @@ const CSV_HEADERS = [
   "Employment type",
   "Agency",
   "Task",
-  "Department",
+  "Task department",
+  "Employee department",
   "Direct/Indirect",
   "Paid",
   "First task start",
@@ -257,7 +289,8 @@ export function reportRowsToCsv(rows: ReportRow[]): string {
         row.employmentType,
         row.agencyName ?? "",
         row.taskName,
-        row.departmentName ?? "",
+        row.taskDepartmentName ?? "",
+        row.employeeDepartmentName ?? "",
         categoryLabel(row.category),
         row.isPaid ? "Yes" : "No",
         fmtTimeSydney(row.firstTaskStart),
@@ -282,11 +315,19 @@ export function reportRowsToCsv(rows: ReportRow[]): string {
 export function summarizeByTask(rows: ReportRow[]) {
   const map = new Map<
     string,
-    { taskName: string; category: TaskCategory; isPaid: boolean; people: Set<string>; netMinutes: number }
+    {
+      taskName: string;
+      taskDepartmentName: string | null;
+      category: TaskCategory;
+      isPaid: boolean;
+      people: Set<string>;
+      netMinutes: number;
+    }
   >();
   for (const row of rows) {
     const entry = map.get(row.taskName) ?? {
       taskName: row.taskName,
+      taskDepartmentName: row.taskDepartmentName,
       category: row.category,
       isPaid: row.isPaid,
       people: new Set(),
@@ -297,7 +338,43 @@ export function summarizeByTask(rows: ReportRow[]) {
     map.set(row.taskName, entry);
   }
   return Array.from(map.values())
-    .map((e) => ({ taskName: e.taskName, category: e.category, isPaid: e.isPaid, peopleCount: e.people.size, netMinutes: e.netMinutes }))
+    .map((e) => ({
+      taskName: e.taskName,
+      taskDepartmentName: e.taskDepartmentName,
+      category: e.category,
+      isPaid: e.isPaid,
+      peopleCount: e.people.size,
+      netMinutes: e.netMinutes,
+    }))
+    .sort((a, b) => b.netMinutes - a.netMinutes);
+}
+
+// Department-level rollup — grouped by the TASK's department (see
+// ReportRow.taskDepartmentName's doc comment above), not the acting
+// employee's home department. A task with no department assigned yet
+// (Task.departmentId still null — see its doc comment in schema.prisma)
+// falls into the "No department" bucket rather than being silently
+// dropped, so a gap in setup is visible here instead of just under-
+// counting some other department's hours.
+const NO_DEPARTMENT_LABEL = "No department";
+
+export function summarizeByDepartment(rows: ReportRow[]) {
+  const map = new Map<string, { departmentName: string; people: Set<string>; tasks: Set<string>; netMinutes: number }>();
+  for (const row of rows) {
+    const key = row.taskDepartmentName ?? NO_DEPARTMENT_LABEL;
+    const entry = map.get(key) ?? { departmentName: key, people: new Set(), tasks: new Set(), netMinutes: 0 };
+    entry.people.add(row.employeeCode);
+    entry.tasks.add(row.taskName);
+    entry.netMinutes += row.taskNetMinutes;
+    map.set(key, entry);
+  }
+  return Array.from(map.values())
+    .map((e) => ({
+      departmentName: e.departmentName,
+      peopleCount: e.people.size,
+      taskCount: e.tasks.size,
+      netMinutes: e.netMinutes,
+    }))
     .sort((a, b) => b.netMinutes - a.netMinutes);
 }
 
