@@ -286,7 +286,14 @@ function EditPatternModal({
   const [start, setStart] = useState(pattern?.startHHMM ?? "06:00");
   const [finish, setFinish] = useState(pattern?.finishHHMM ?? "14:00");
   const [paidHours, setPaidHours] = useState(pattern ? String(pattern.paidHours) : "8");
-  const [taskId, setTaskId] = useState(pattern?.taskId ?? taskOptions[0]?.id ?? "");
+  // Deliberately NOT taskOptions[0]?.id for a brand-new pattern — that
+  // silently pre-selected the first task in the list without the admin
+  // choosing it (nothing on screen distinguished "defaulted" from
+  // "deliberately picked"), so a quick Save locked in whatever happened to
+  // sort first. Blank forces an explicit choice, same as Department/Default
+  // shift on the Team member form, and the existing "Choose a task" check
+  // below now actually has something to catch.
+  const [taskId, setTaskId] = useState(pattern?.taskId ?? "");
   const [effectiveFrom, setEffectiveFrom] = useState(todayStr);
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
@@ -444,6 +451,7 @@ function EditPatternModal({
               onChange={(e) => setTaskId(e.target.value)}
               className="mt-0.5 block w-full rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-950"
             >
+              <option value="">—</option>
               {taskOptions.map((t) => (
                 <option key={t.id} value={t.id}>
                   {t.name}
