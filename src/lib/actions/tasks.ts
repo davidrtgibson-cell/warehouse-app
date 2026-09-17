@@ -10,6 +10,13 @@ import { TaskCategory } from "@/generated/prisma/client";
 // and the isPaid flag (see its doc comment on Task in schema.prisma).
 // ADMIN-only, same as every other Settings action (see requireAdmin in
 // src/lib/auth.ts).
+//
+// departmentId is required here even though Task.departmentId is nullable
+// in the schema — nullable only so tasks created before this field existed
+// don't break; every create/update through this file must pick one, which
+// backfills old tasks naturally as an admin edits them. See Task's own doc
+// comment in schema.prisma for why this is a different department than
+// Employee.departmentId.
 
 function parseCategory(value: string): TaskCategory {
   if (value !== "PRODUCTIVE" && value !== "INDIRECT" && value !== "LEAVE") {
@@ -18,11 +25,12 @@ function parseCategory(value: string): TaskCategory {
   return value;
 }
 
-export async function createTaskAction(name: string, category: string, isPaid: boolean) {
+export async function createTaskAction(name: string, category: string, isPaid: boolean, departmentId: string) {
   const actingUser = await requireAdmin();
   const trimmedName = name.trim();
   if (!trimmedName) throw new Error("Name is required");
   const parsedCategory = parseCategory(category);
+  if (!departmentId) throw new Error("Choose a department");
 
   const existing = await prisma.task.findUnique({ where: { name: trimmedName } });
   if (existing) throw new Error("A task with that name already exists");
@@ -32,14 +40,14 @@ export async function createTaskAction(name: string, category: string, isPaid: b
 
   await prisma.$transaction(async (tx) => {
     const task = await tx.task.create({
-      data: { name: trimmedName, category: parsedCategory, isPaid, sortOrder },
+      data: { name: trimmedName, category: parsedCategory, isPaid, departmentId, sortOrder },
     });
     await tx.auditLog.create({
       data: {
         entityType: "Task",
         entityId: task.id,
         action: "CREATE_TASK",
-        changes: { name: trimmedName, category: parsedCategory, isPaid },
+        changes: { name: trimmedName, category: parsedCategory, isPaid, departmentId },
         changedByUserId: actingUser.id,
       },
     });
@@ -48,11 +56,18 @@ export async function createTaskAction(name: string, category: string, isPaid: b
   refresh();
 }
 
-export async function updateTaskAction(id: string, name: string, category: string, isPaid: boolean) {
+export async function updateTaskAction(
+  id: string,
+  name: string,
+  category: string,
+  isPaid: boolean,
+  departmentId: string
+) {
   const actingUser = await requireAdmin();
   const trimmedName = name.trim();
   if (!trimmedName) throw new Error("Name is required");
   const parsedCategory = parseCategory(category);
+  if (!departmentId) throw new Error("Choose a department");
 
   const existing = await prisma.task.findUnique({ where: { id } });
   if (!existing) throw new Error("Task not found");
@@ -61,15 +76,15 @@ export async function updateTaskAction(id: string, name: string, category: strin
   if (nameClash) throw new Error("A task with that name already exists");
 
   await prisma.$transaction(async (tx) => {
-    await tx.task.update({ where: { id }, data: { name: trimmedName, category: parsedCategory, isPaid } });
+    await tx.task.update({ where: { id }, data: { name: trimmedName, category: parsedCategory, isPaid, departmentId } });
     await tx.auditLog.create({
       data: {
         entityType: "Task",
         entityId: id,
         action: "UPDATE_TASK",
         changes: {
-          from: { name: existing.name, category: existing.category, isPaid: existing.isPaid },
-          to: { name: trimmedName, category: parsedCategory, isPaid },
+          from: { name: existing.name, category: existing.category, isPaid: existing.isPaid, departmentId: existing.departmentId },
+          to: { name: trimmedName, category: parsedCategory, isPaid, departmentId },
         },
         changedByUserId: actingUser.id,
       },

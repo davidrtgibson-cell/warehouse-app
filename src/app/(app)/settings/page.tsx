@@ -2,9 +2,6 @@ import Link from "next/link";
 
 export const dynamic = "force-dynamic";
 
-// Structured so future settings sections (Departments — already
-// schema-ready per the isActive/sortOrder convention, but with no UI yet)
-// can be added as more links here without a URL restructure.
 const SETTINGS_SECTIONS = [
   {
     href: "/settings/users",
@@ -18,8 +15,8 @@ const SETTINGS_SECTIONS = [
   },
   {
     href: "/settings/tasks",
-    label: "Tasks",
-    description: "Direct/indirect work and leave types every roster and the live board pick from.",
+    label: "Departments & tasks",
+    description: "Department groups, and the direct/indirect work and leave types under each one.",
   },
   {
     href: "/settings/shifts",

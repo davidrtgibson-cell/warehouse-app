@@ -151,6 +151,7 @@ model Department {
   updatedAt DateTime @updatedAt @db.Timestamptz
 
   employees Employee[]
+  tasks     Task[]
 
   @@map("departments")
 }
@@ -204,6 +205,18 @@ model Task {
   id        String       @id @default(cuid())
   name      String       @unique
   category  TaskCategory
+  // A DIFFERENT axis from Employee.departmentId — that's who someone
+  // nominally belongs to; this is which department the work itself counts
+  // toward (e.g. Unloader/Flat Receiving/GOH Receiving under Inbound, GTP
+  // Picking/GOH Picking under Order Fulfilment). Reporting rolls hours up
+  // by this field, not by the acting employee's home department, since a
+  // person moves across tasks/departments within a shift — see
+  // taskDepartmentName vs. employeeDepartmentName on ReportRow in
+  // src/lib/reporting.ts. Nullable so existing tasks created before this
+  // field existed don't break; the Settings > Tasks UI requires a choice
+  // for every new/edited task, so this backfills naturally over time.
+  departmentId String?
+  department   Department?  @relation(fields: [departmentId], references: [id])
   // Chiefly meaningful for LEAVE-category tasks — e.g. Personal Leave paid,
   // Annual Leave *not* paid in this app's sense (it's compensated via
   // accrued balance through payroll, not through this app's worked-hours

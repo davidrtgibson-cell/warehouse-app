@@ -194,30 +194,44 @@ async function main() {
   // through payroll, not through this app's worked-hours reporting, so it's
   // flagged unpaid *in this app's sense* despite genuinely being paid leave;
   // LWOP is unpaid outright; Personal Leave and Other Leave are paid here.
-  const taskSeeds: { name: string; category: TaskCategory; isPaid?: boolean }[] = [
-    { name: "GTP Picking", category: TaskCategory.PRODUCTIVE },
-    { name: "Manual Picking", category: TaskCategory.PRODUCTIVE },
-    { name: "Indent Picking", category: TaskCategory.PRODUCTIVE },
-    { name: "Packing", category: TaskCategory.PRODUCTIVE },
-    { name: "Receiving", category: TaskCategory.PRODUCTIVE },
-    { name: "Putaway", category: TaskCategory.PRODUCTIVE },
-    { name: "VAS", category: TaskCategory.PRODUCTIVE },
-    { name: "Inventory", category: TaskCategory.INDIRECT },
-    { name: "Break", category: TaskCategory.INDIRECT },
-    { name: "Training", category: TaskCategory.INDIRECT },
-    { name: "Cleaning", category: TaskCategory.INDIRECT },
-    { name: "Annual Leave", category: TaskCategory.LEAVE, isPaid: false },
-    { name: "Personal Leave", category: TaskCategory.LEAVE, isPaid: true },
-    { name: "Other Leave", category: TaskCategory.LEAVE, isPaid: true },
-    { name: "LWOP", category: TaskCategory.LEAVE, isPaid: false },
+  //
+  // department names below must match departmentNames above exactly —
+  // every task now belongs to one (see Task.departmentId's doc comment in
+  // schema.prisma: a DIFFERENT axis from Employee.departmentId, used to
+  // roll reporting hours up by what the work was, not who did it). Leave/
+  // indirect tasks land in Support Services as the catch-all for
+  // non-operational time, same as this seed's own department already
+  // implies.
+  const taskSeeds: { name: string; category: TaskCategory; isPaid?: boolean; department: string }[] = [
+    { name: "GTP Picking", category: TaskCategory.PRODUCTIVE, department: "Outbound" },
+    { name: "Manual Picking", category: TaskCategory.PRODUCTIVE, department: "Outbound" },
+    { name: "Indent Picking", category: TaskCategory.PRODUCTIVE, department: "Outbound" },
+    { name: "Packing", category: TaskCategory.PRODUCTIVE, department: "Outbound" },
+    { name: "Receiving", category: TaskCategory.PRODUCTIVE, department: "Inbound" },
+    { name: "Putaway", category: TaskCategory.PRODUCTIVE, department: "Inbound" },
+    { name: "VAS", category: TaskCategory.PRODUCTIVE, department: "Value Added Services" },
+    { name: "Inventory", category: TaskCategory.INDIRECT, department: "Inventory Control" },
+    { name: "Break", category: TaskCategory.INDIRECT, department: "Support Services" },
+    { name: "Training", category: TaskCategory.INDIRECT, department: "Support Services" },
+    { name: "Cleaning", category: TaskCategory.INDIRECT, department: "Support Services" },
+    { name: "Annual Leave", category: TaskCategory.LEAVE, isPaid: false, department: "Support Services" },
+    { name: "Personal Leave", category: TaskCategory.LEAVE, isPaid: true, department: "Support Services" },
+    { name: "Other Leave", category: TaskCategory.LEAVE, isPaid: true, department: "Support Services" },
+    { name: "LWOP", category: TaskCategory.LEAVE, isPaid: false, department: "Support Services" },
   ];
-  const tasks = taskSeeds.map((t, i) => ({
-    id: randomUUID(),
-    name: t.name,
-    category: t.category,
-    isPaid: t.isPaid ?? true,
-    sortOrder: i,
-  }));
+  const departmentIdByName = new Map(departments.map((d) => [d.name, d.id]));
+  const tasks = taskSeeds.map((t, i) => {
+    const departmentId = departmentIdByName.get(t.department);
+    if (!departmentId) throw new Error(`Unknown seed department "${t.department}" for task "${t.name}"`);
+    return {
+      id: randomUUID(),
+      name: t.name,
+      category: t.category,
+      isPaid: t.isPaid ?? true,
+      departmentId,
+      sortOrder: i,
+    };
+  });
   await prisma.task.createMany({ data: tasks });
   const productiveTasks = tasks.filter((t) => t.category === TaskCategory.PRODUCTIVE);
   const leaveTasks = tasks.filter((t) => t.category === TaskCategory.LEAVE);

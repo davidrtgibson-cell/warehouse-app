@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { createTaskAction, moveTaskAction, setTaskActiveAction, setTaskVisibleAction, updateTaskAction } from "@/lib/actions/tasks";
+import type { DepartmentOption } from "@/components/EmployeeManagementGrid";
 
 export type TaskRow = {
   id: string;
@@ -11,6 +12,8 @@ export type TaskRow = {
   isActive: boolean;
   isVisible: boolean;
   sortOrder: number;
+  departmentId: string | null;
+  departmentName: string | null;
 };
 
 function fieldClass() {
@@ -46,27 +49,53 @@ function CategorySelect({
   );
 }
 
+function DepartmentSelect({
+  value,
+  departments,
+  disabled,
+  onChange,
+}: {
+  value: string;
+  departments: DepartmentOption[];
+  disabled: boolean;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <select value={value} disabled={disabled} onChange={(e) => onChange(e.target.value)} className={fieldClass()}>
+      <option value="">Choose a department…</option>
+      {departments.map((d) => (
+        <option key={d.id} value={d.id}>
+          {d.name}
+        </option>
+      ))}
+    </select>
+  );
+}
+
 function EditTaskForm({
   initial,
+  departments,
   onSave,
   onCancel,
   disabled,
 }: {
-  initial: { name: string; category: TaskRow["category"]; isPaid: boolean };
-  onSave: (name: string, category: TaskRow["category"], isPaid: boolean) => Promise<void>;
+  initial: { name: string; category: TaskRow["category"]; isPaid: boolean; departmentId: string | null };
+  departments: DepartmentOption[];
+  onSave: (name: string, category: TaskRow["category"], isPaid: boolean, departmentId: string) => Promise<void>;
   onCancel: () => void;
   disabled: boolean;
 }) {
   const [name, setName] = useState(initial.name);
   const [category, setCategory] = useState<TaskRow["category"]>(initial.category);
   const [isPaid, setIsPaid] = useState(initial.isPaid);
+  const [departmentId, setDepartmentId] = useState(initial.departmentId ?? "");
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
   function submit() {
     startTransition(async () => {
       try {
-        await onSave(name, category, isPaid);
+        await onSave(name, category, isPaid, departmentId);
         setError(null);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to save");
@@ -86,6 +115,12 @@ function EditTaskForm({
       />
       <div className="flex flex-wrap items-center gap-3 text-sm">
         <CategorySelect value={category} disabled={disabled || isPending} onChange={setCategory} />
+        <DepartmentSelect
+          value={departmentId}
+          departments={departments}
+          disabled={disabled || isPending}
+          onChange={setDepartmentId}
+        />
         <label className="flex items-center gap-1.5">
           <input
             type="checkbox"
@@ -116,7 +151,19 @@ function EditTaskForm({
   );
 }
 
-function TaskRowView({ task, disabled, isFirst, isLast }: { task: TaskRow; disabled: boolean; isFirst: boolean; isLast: boolean }) {
+function TaskRowView({
+  task,
+  departments,
+  disabled,
+  isFirst,
+  isLast,
+}: {
+  task: TaskRow;
+  departments: DepartmentOption[];
+  disabled: boolean;
+  isFirst: boolean;
+  isLast: boolean;
+}) {
   const [editing, setEditing] = useState(false);
   const [isPending, startTransition] = useTransition();
   const [message, setMessage] = useState<string | null>(null);
@@ -156,11 +203,12 @@ function TaskRowView({ task, disabled, isFirst, isLast }: { task: TaskRow; disab
   if (editing) {
     return (
       <EditTaskForm
-        initial={{ name: task.name, category: task.category, isPaid: task.isPaid }}
+        initial={{ name: task.name, category: task.category, isPaid: task.isPaid, departmentId: task.departmentId }}
+        departments={departments}
         disabled={disabled}
         onCancel={() => setEditing(false)}
-        onSave={async (name, category, isPaid) => {
-          await updateTaskAction(task.id, name, category, isPaid);
+        onSave={async (name, category, isPaid, departmentId) => {
+          await updateTaskAction(task.id, name, category, isPaid, departmentId);
           setEditing(false);
         }}
       />
@@ -172,6 +220,8 @@ function TaskRowView({ task, disabled, isFirst, isLast }: { task: TaskRow; disab
       <div>
         <div className="text-sm font-medium">{task.name}</div>
         <div className="text-xs text-zinc-500">
+          {task.departmentName ?? <span className="text-amber-600 dark:text-amber-400">No department</span>}
+          {" · "}
           {categoryLabel(task.category)}
           {task.category === "LEAVE" && (task.isPaid ? " · paid" : " · unpaid")}
           {!task.isVisible && " · hidden from live board"}
@@ -236,8 +286,13 @@ function TaskRowView({ task, disabled, isFirst, isLast }: { task: TaskRow; disab
   );
 }
 
-function AddTaskForm({ disabled }: { disabled: boolean }) {
+function AddTaskForm({ departments, disabled }: { departments: DepartmentOption[]; disabled: boolean }) {
   const [open, setOpen] = useState(false);
+
+  if (departments.length === 0) {
+    return <p className="text-sm text-zinc-500">Add a department above before adding tasks.</p>;
+  }
+
   if (!open) {
     return (
       <button
@@ -252,18 +307,27 @@ function AddTaskForm({ disabled }: { disabled: boolean }) {
   }
   return (
     <EditTaskForm
-      initial={{ name: "", category: "PRODUCTIVE", isPaid: true }}
+      initial={{ name: "", category: "PRODUCTIVE", isPaid: true, departmentId: null }}
+      departments={departments}
       disabled={disabled}
       onCancel={() => setOpen(false)}
-      onSave={async (name, category, isPaid) => {
-        await createTaskAction(name, category, isPaid);
+      onSave={async (name, category, isPaid, departmentId) => {
+        await createTaskAction(name, category, isPaid, departmentId);
         setOpen(false);
       }}
     />
   );
 }
 
-export function TaskManagementGrid({ tasks, disabled }: { tasks: TaskRow[]; disabled: boolean }) {
+export function TaskManagementGrid({
+  tasks,
+  departments,
+  disabled,
+}: {
+  tasks: TaskRow[];
+  departments: DepartmentOption[];
+  disabled: boolean;
+}) {
   const active = tasks.filter((t) => t.isActive).sort((a, b) => a.sortOrder - b.sortOrder);
   const retired = tasks.filter((t) => !t.isActive);
 
@@ -274,11 +338,18 @@ export function TaskManagementGrid({ tasks, disabled }: { tasks: TaskRow[]; disa
           <p className="py-3 text-sm text-zinc-500">No active tasks.</p>
         ) : (
           active.map((task, i) => (
-            <TaskRowView key={task.id} task={task} disabled={disabled} isFirst={i === 0} isLast={i === active.length - 1} />
+            <TaskRowView
+              key={task.id}
+              task={task}
+              departments={departments}
+              disabled={disabled}
+              isFirst={i === 0}
+              isLast={i === active.length - 1}
+            />
           ))
         )}
       </div>
-      <AddTaskForm disabled={disabled} />
+      <AddTaskForm departments={departments} disabled={disabled} />
       {retired.length > 0 && (
         <details>
           <summary className="cursor-pointer text-sm text-zinc-500 hover:underline">
@@ -286,7 +357,7 @@ export function TaskManagementGrid({ tasks, disabled }: { tasks: TaskRow[]; disa
           </summary>
           <div className="mt-2 divide-y divide-zinc-200 dark:divide-zinc-800">
             {retired.map((task) => (
-              <TaskRowView key={task.id} task={task} disabled={disabled} isFirst isLast />
+              <TaskRowView key={task.id} task={task} departments={departments} disabled={disabled} isFirst isLast />
             ))}
           </div>
         </details>

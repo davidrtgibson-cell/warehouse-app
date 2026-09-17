@@ -11,9 +11,12 @@ test.describe("settings > tasks CRUD", () => {
     await login(page, ADMIN_EMAIL);
     await page.goto("/settings/tasks");
 
-    // Create
+    // Create — department is required (see Task.departmentId's doc comment
+    // in schema.prisma); pick whatever the seed's first department is.
     await page.getByRole("button", { name: "+ Add task" }).click();
     await page.getByPlaceholder("Task name").fill(name);
+    const departmentSelect = page.locator("select").filter({ hasText: "Choose a department" });
+    await departmentSelect.selectOption({ index: 1 });
     await page.getByRole("button", { name: "Save" }).click();
     const createdRow = page.locator(ROW_SELECTOR).filter({ hasText: name });
     await expect(createdRow).toBeVisible();
