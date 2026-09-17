@@ -60,6 +60,9 @@ export default async function AppLayout({ children }: LayoutProps<"/">) {
           <div className="text-zinc-500">
             {currentUser.name} <span className="text-zinc-400">({currentUser.role === "ADMIN" ? "Admin" : "Leader"})</span>
           </div>
+          <Link href="/account" className="mt-1 block text-zinc-500 hover:underline">
+            Change password
+          </Link>
           <form action={logoutAction} className="mt-1">
             <button type="submit" className="text-zinc-500 hover:underline">
               Log out

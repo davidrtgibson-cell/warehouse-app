@@ -3,7 +3,7 @@
 import { refresh } from "next/cache";
 import { prisma } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth";
-import { hashPassword } from "@/lib/password";
+import { hashPassword, validatePassword } from "@/lib/password";
 import { UserRole } from "@/generated/prisma/client";
 
 // User maintenance (BACKLOG.md item #2) — add/remove (soft, via isActive,
@@ -13,21 +13,17 @@ import { UserRole } from "@/generated/prisma/client";
 // break-rules/shifts/standard-roster, can grant or revoke ADMIN itself, so
 // it's exactly where that boundary matters most.
 //
-// There's no self-service "forgot password" flow (see the non-goals list in
-// the original login-auth plan) — an admin sets the initial password on
-// create and can set a new one via resetUserPasswordAction; communicating
-// it to the user happens outside the app, same as the seeded dev password.
-
-const MIN_PASSWORD_LENGTH = 8;
+// There's still no self-service "forgot password" flow for someone who's
+// lost access entirely (see the non-goals list in the original login-auth
+// plan) — an admin sets the initial password on create and can set a new
+// one via resetUserPasswordAction; communicating it to the user happens
+// outside the app, same as the seeded dev password. Someone who still knows
+// their current password can change it themselves via
+// lib/actions/account.ts (Settings isn't involved — that's ADMIN-only, and
+// this needs to work for LEADERs too).
 
 function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
-}
-
-function validatePassword(password: string) {
-  if (password.length < MIN_PASSWORD_LENGTH) {
-    throw new Error(`Password must be at least ${MIN_PASSWORD_LENGTH} characters`);
-  }
 }
 
 export async function createUserAction(name: string, email: string, password: string, role: UserRole) {

@@ -4,6 +4,17 @@ import { promisify } from "node:util";
 const scryptAsync = promisify(scrypt);
 const KEY_LENGTH = 64;
 
+export const MIN_PASSWORD_LENGTH = 8;
+
+// Shared by every place a new/replacement password is accepted (admin
+// create/reset in lib/actions/users.ts, self-service change in
+// lib/actions/account.ts) so the rule can't drift between them.
+export function validatePassword(password: string) {
+  if (password.length < MIN_PASSWORD_LENGTH) {
+    throw new Error(`Password must be at least ${MIN_PASSWORD_LENGTH} characters`);
+  }
+}
+
 // Node's own recommendation for password hashing without a third-party
 // dependency (bcrypt/argon2) — this project has stayed dependency-minimal
 // throughout (e.g. the CSV export in src/lib/reporting.ts is hand-built
