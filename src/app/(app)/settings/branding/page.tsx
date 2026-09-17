@@ -21,7 +21,7 @@ export default async function BrandingSettingsPage() {
           </p>
         </div>
         <section className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
-          <BrandingSettingsForm initialAccentColor={branding.accentColor} currentLogoPath={branding.logoPath} />
+          <BrandingSettingsForm initialAccentColor={branding.accentColor} currentLogoSrc={branding.logoSrc} />
         </section>
       </div>
     </div>

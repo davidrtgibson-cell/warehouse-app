@@ -129,14 +129,28 @@ you set in Step 1):
 'DATABASE_URL="postgresql://postgres:YOUR_PASSWORD@localhost:5432/warehouse"' | Out-File -Encoding utf8 .env
 ```
 
+The app's database client is generated into its own folder from the schema, and isn't downloaded by
+`npm install` — generate it now:
+
+```powershell
+npm run db:generate
+```
+
 Now build the actual tables inside that empty database:
 
 ```powershell
-npx prisma migrate deploy
+npm run db:migrate
 ```
 
 This reads the app's schema and creates every table it needs. You'll see a list of migrations being
 applied — that's expected and correct.
+
+> **If `npm install` didn't go cleanly** (interrupted, or the server PC lost network mid-install), run
+> it again before continuing. A partial install can leave the commands above resolving to the wrong,
+> unpinned version of a tool instead of the exact one this app was built against, which fails in
+> confusing ways. `npm run` (used above) mostly protects you from this — unlike `npx`, it only ever
+> runs the copy already sitting in this project's `node_modules`, and errors loudly if that's missing,
+> rather than silently fetching something else off the internet.
 
 ---
 
@@ -156,7 +170,7 @@ This is the one login that lets you sign in and set everything else up (your rea
 shifts, etc.) through the app itself:
 
 ```powershell
-npx tsx scripts/create-admin.ts --email you@yourcompany.com --name "Your Name"
+npm run create-admin -- --email you@yourcompany.com --name "Your Name"
 ```
 
 Use your own real email and name. It'll print a password — **copy it somewhere safe right now**, it's
@@ -223,6 +237,13 @@ reason — allow the app through it (**as Administrator**):
 New-NetFirewallRule -DisplayName "Warehouse App" -Direction Inbound -Protocol TCP -LocalPort 3000 -Action Allow
 ```
 
+> **This setup is plain HTTP, on purpose.** The login cookie is deliberately *not* marked `Secure`,
+> because browsers silently refuse to store `Secure` cookies on a non-HTTPS connection — with it set,
+> login would appear to succeed (valid session created server-side) but the browser would drop the
+> cookie and bounce you straight back to `/login`. If you ever put this behind HTTPS (a reverse proxy,
+> a real domain, etc.), add `COOKIE_SECURE=true` to `.env` and rebuild — see the comment in
+> `src/lib/auth.ts`.
+
 ---
 
 ## What does *not* come along automatically
@@ -237,16 +258,44 @@ New-NetFirewallRule -DisplayName "Warehouse App" -Direction Inbound -Protocol TC
 ## Updating the app later
 
 When new features land (pushed to GitHub), bringing them onto the server PC is much shorter than the
-initial setup — in PowerShell, as Administrator:
+initial setup. Run the **entire** sequence below in **one** PowerShell window opened **as Administrator**
+(right-click PowerShell in the Start menu → "Run as administrator") — `Stop-Service`/`Start-Service`
+and the app's own build/migrate steps all need to happen in the same session, and mixing an elevated
+window for some steps with a normal one for others is the most common way this goes wrong (see gotchas
+below).
+
+An Administrator PowerShell window opens in `C:\Windows\system32` by default, **not** the project
+folder — that's what the `Set-Location` line below is for; don't skip it.
 
 ```powershell
 Stop-Service WarehouseApp
 Set-Location C:\Apps\warehouse-app
 git pull
 npm install
-npx prisma migrate deploy
+npm run db:generate
+npm run db:migrate
 npm run build
 Start-Service WarehouseApp
 ```
 
-That's the whole update process, every time.
+That's the whole update process, every time. If anything seems not to have taken effect (old page still
+showing after a rebuild, etc.), check the service actually cycled:
+
+```powershell
+Get-Service WarehouseApp
+```
+
+---
+
+## Ops gotchas
+
+- **`Stop-Service` / `Start-Service` / `Restart-Service` and the firewall rule (Step 7) all require an
+  elevated (Administrator) PowerShell window.** Run in a normal window, they fail with something like
+  *"Cannot open WarehouseApp service on computer '.'."* — but a failed `Stop-Service` fails silently as
+  far as the rest of the sequence is concerned: the old process keeps running and keeps serving old code
+  even after a full `npm run build`, and the following `Start-Service` on an "already running" service
+  does nothing and reports success. If a rebuild ever doesn't seem to have taken effect, re-run the
+  whole update sequence above in a genuinely elevated window rather than assuming the code is wrong.
+- **A PowerShell window opened as Administrator starts in `C:\Windows\system32`**, not wherever your
+  normal PowerShell starts — easy to forget the `Set-Location C:\Apps\warehouse-app` and get a confusing
+  "access denied" a step later (e.g. trying to create `.env` in `system32`).

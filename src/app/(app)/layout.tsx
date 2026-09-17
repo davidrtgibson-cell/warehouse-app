@@ -47,9 +47,9 @@ export default async function AppLayout({ children }: LayoutProps<"/">) {
           }
         >
           <Link href="/" className={branding.accentColor ? "text-sm font-semibold text-white hover:underline" : "text-sm font-semibold hover:underline"}>
-            {branding.logoPath ? (
+            {branding.logoSrc ? (
               // eslint-disable-next-line @next/next/no-img-element -- admin-uploaded file on disk, not a static/optimizable asset
-              <img src={branding.logoPath} alt="Warehouse App" className="h-12 w-auto max-w-full object-contain" />
+              <img src={branding.logoSrc} alt="Warehouse App" className="h-12 w-auto max-w-full object-contain" />
             ) : (
               "Warehouse App"
             )}

@@ -14,10 +14,10 @@ import { ConfirmSubmitButton } from "@/components/ConfirmSubmitButton";
 // validate, so there's nothing an inline error would add.
 export function BrandingSettingsForm({
   initialAccentColor,
-  currentLogoPath,
+  currentLogoSrc,
 }: {
   initialAccentColor: string | null;
-  currentLogoPath: string | null;
+  currentLogoSrc: string | null;
 }) {
   const [accentColor, setAccentColor] = useState(initialAccentColor ?? "");
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -88,11 +88,11 @@ export function BrandingSettingsForm({
           Shown in the side nav header and on the login page in place of the plain wordmark. PNG, JPEG,
           WebP, or SVG, up to 2 MB.
         </p>
-        {currentLogoPath && (
+        {currentLogoSrc && (
           <div className="mt-2 flex items-center gap-3">
             {/* eslint-disable-next-line @next/next/no-img-element -- admin-uploaded file on disk, not a static/optimizable asset */}
             <img
-              src={currentLogoPath}
+              src={currentLogoSrc}
               alt="Current logo"
               className="h-12 w-auto rounded border border-zinc-200 bg-white p-1 dark:border-zinc-800"
             />
